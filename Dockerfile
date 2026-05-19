@@ -2,7 +2,7 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 
 # Copy root package files (monorepo workspaces declaration)
-COPY package.json package-lock.json turbo.json ./
+COPY package.json package-lock.json ./
 
 # Copy workspace package.json files so npm ci can resolve workspaces
 COPY apps/web/package.json apps/web/package.json
@@ -17,7 +17,6 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json
 COPY --from=deps /app/package-lock.json ./package-lock.json
-COPY --from=deps /app/turbo.json ./turbo.json
 
 # Copy source — only what apps/web and prisma schema need
 COPY apps/web apps/web
