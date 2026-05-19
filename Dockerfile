@@ -26,9 +26,9 @@ COPY services/prisma services/prisma
 # Generate Prisma client (absolute path from root /app)
 RUN /app/node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
 
-# Build Next.js from apps/web directory (binary at apps/web/node_modules/.bin)
+# Build Next.js from apps/web directory (npx finds next in root node_modules)
 WORKDIR /app/apps/web
-RUN node node_modules/.bin/next build
+RUN npx next build
 
 # Stage 3: Runner
 FROM node:20-alpine AS runner
