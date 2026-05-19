@@ -21,12 +21,13 @@ COPY --from=deps /app/apps/web/package.json ./apps/web/package.json
 COPY apps/web apps/web
 COPY services/prisma services/prisma
 
-# Generate Prisma client
-RUN ./node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
+# Generate Prisma client (absolute path from root /app)
+RUN /app/node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
 
-# Build Next.js
+# Build Next.js from apps/web directory (binary at root /app/node_modules)
 WORKDIR /app/apps/web
-RUN ./node_modules/.bin/next build
+ENV PATH=/app/node_modules/.bin:$PATH
+RUN next build
 
 # Stage 3: Runner
 FROM node:20-alpine AS runner
