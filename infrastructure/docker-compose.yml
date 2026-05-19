@@ -1,0 +1,132 @@
+version: '3.8'
+services:
+  app:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+    ports: ['3000:3000']
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - JHCIS_DATABASE_URL=${JHCIS_DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - NODE_ENV=production
+    depends_on:
+      database: { condition: service_healthy }
+      redis: { condition: service_started }
+      minio: { condition: service_started }
+    volumes:
+      - uploads:/app/uploads
+    restart: unless-stopped
+    networks: [geohealth]
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000/api/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+
+  database:
+    image: mariadb:11
+    environment:
+      - MARIADB_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=geohealth
+      - MARIADB_USER=geohealth
+      - MARIADB_PASSWORD=${MARIADB_PASSWORD}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports: ['3307:3306']
+    restart: unless-stopped
+    networks: [geohealth]
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports: ['6379:6379']
+    restart: unless-stopped
+    networks: [geohealth]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ':9001'
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    ports: ['9000:9000', '9001:9001']
+    restart: unless-stopped
+    networks: [geohealth]
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+
+  sync-worker:
+    build:
+      context: ../services/sync-worker
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - JHCIS_DATABASE_URL=${JHCIS_DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      database: { condition: service_healthy }
+      redis: { condition: service_started }
+    restart: unless-stopped
+    networks: [geohealth]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
+networks:
+  geohealth:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  redis_data:
+  minio_data:
+  uploads:

@@ -1,0 +1,14 @@
+http:
+  routers:
+    geohealth:
+      rule: Host(`geohealth.phoubon.in.th`)
+      service: geohealth
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+  services:
+    geohealth:
+      loadBalancer:
+        servers:
+          - url: http://app:3000

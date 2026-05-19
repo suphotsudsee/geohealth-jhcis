@@ -1,0 +1,417 @@
+// ───────────────────────────────────────────────
+// GeoHealth-JHCIS — Prisma Schema v1.0.0
+// Target: MariaDB 11.x (MySQL-compatible)
+// ───────────────────────────────────────────────
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════
+// AUTHENTICATION & AUTHORIZATION
+// ═══════════════════════════════════════
+
+model User {
+  id            String   @id @default(cuid())
+  username      String   @unique
+  passwordHash  String
+  displayName   String
+  email         String?
+  phone         String?
+  role          Role     @default(VIEWER)
+  villageCode   String?
+  districtCode  String?
+  provinceCode  String?
+  isActive      Boolean  @default(true)
+  lastLogin     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+  ffcVisits     FFCVisit[]
+
+  @@index([role])
+  @@index([villageCode])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  device    String?
+  ip        String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+enum Role {
+  ADMIN
+  DISTRICT
+  HOSPITAL
+  FFC
+  VIEWER
+}
+
+// ═══════════════════════════════════════
+// GEOGRAPHIC HIERARCHY
+// ═══════════════════════════════════════
+
+model Province {
+  code       String      @id
+  nameTh     String
+  nameEn     String?
+  districts  District[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+model District {
+  code         String      @id
+  nameTh       String
+  nameEn       String?
+  provinceCode String
+  province     Province    @relation(fields: [provinceCode], references: [code])
+  subDistricts SubDistrict[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([provinceCode])
+}
+
+model SubDistrict {
+  code          String    @id
+  nameTh        String
+  nameEn        String?
+  districtCode  String
+  district      District  @relation(fields: [districtCode], references: [code])
+  villages      Village[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([districtCode])
+}
+
+model Village {
+  id             String       @id @default(cuid())
+  code           String       @unique
+  name           String
+  moo            Int?
+  subDistrictCode String
+  subDistrict    SubDistrict  @relation(fields: [subDistrictCode], references: [code])
+  boundary       Unsupported("POLYGON")?
+  centerLat      Float?
+  centerLng      Float?
+  houses         House[]
+  riskZones      RiskZone[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([subDistrictCode])
+  @@index([code])
+  @@index([name])
+}
+
+// ═══════════════════════════════════════
+// HOUSEHOLD & PATIENT
+// ═══════════════════════════════════════
+
+model House {
+  id           String       @id @default(cuid())
+  houseNo      String?
+  moo          Int?
+  villageId    String
+  village      Village      @relation(fields: [villageId], references: [id])
+  lat          Float?
+  lng          Float?
+  address      String?
+  riskLevel    RiskLevel    @default(NORMAL)
+  qrCode       String?
+  patients     Patient[]
+  ffcVisits    FFCVisit[]
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([villageId])
+  @@index([lat, lng])
+  @@index([houseNo])
+  @@index([qrCode])
+}
+
+enum RiskLevel {
+  CRITICAL
+  HIGH
+  MEDIUM
+  NORMAL
+}
+
+model Patient {
+  id             String        @id @default(cuid())
+  cid            String?       @unique
+  hn             String?       @unique
+  fullName       String
+  firstName      String?
+  lastName       String?
+  birthDate      DateTime?
+  age            Int?
+  gender         Gender?
+  phone          String?
+  houseId        String?
+  house          House?        @relation(fields: [houseId], references: [id])
+  lat            Float?
+  lng            Float?
+  riskLevel      RiskLevel     @default(NORMAL)
+  chronicDisease String?
+  drugAllergy    String?
+  disability     Boolean?
+  bedridden      Boolean?
+  imageUrl       String?
+  lastSyncAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  chronicRecords   ChronicRecord[]
+  visitRecords     VisitRecord[]
+  labResults       LabResult[]
+  drugRecords      DrugRecord[]
+  ffcVisits        FFCVisit[]
+  syncLogs         SyncLog[]
+
+  @@index([cid])
+  @@index([hn])
+  @@index([fullName])
+  @@index([houseId])
+  @@index([lat, lng])
+  @@index([riskLevel])
+
+  @@fulltext([fullName, firstName, lastName])
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+// ═══════════════════════════════════════
+// HEALTH DATA (from JHCIS 43 แฟ้ม)
+// ═══════════════════════════════════════
+
+model ChronicRecord {
+  id            String   @id @default(cuid())
+  patientId     String
+  patient       Patient  @relation(fields: [patientId], references: [id])
+  diseaseCode   String
+  diseaseName   String
+  diagnosedDate DateTime?
+  severity      String?
+  isActive      Boolean  @default(true)
+  lastFollowUp  DateTime?
+  hospitalCode  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([diseaseCode])
+}
+
+model VisitRecord {
+  id            String   @id @default(cuid())
+  patientId     String
+  patient       Patient  @relation(fields: [patientId], references: [id])
+  visitDate     DateTime
+  hospitalCode  String?
+  diagnosisCode String?
+  diagnosisName String?
+  visitType     String?
+  doctorName    String?
+  createdAt     DateTime @default(now())
+
+  @@index([patientId])
+  @@index([visitDate])
+}
+
+model LabResult {
+  id          String   @id @default(cuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id])
+  labDate     DateTime
+  labCode     String?
+  labName     String
+  result      String
+  unit        String?
+  normalRange String?
+  abnormal    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([patientId])
+  @@index([labDate])
+}
+
+model DrugRecord {
+  id          String   @id @default(cuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id])
+  drugCode    String?
+  drugName    String
+  dosage      String?
+  frequency   String?
+  startDate   DateTime?
+  endDate     DateTime?
+  prescriber  String?
+  createdAt   DateTime @default(now())
+
+  @@index([patientId])
+}
+
+// ═══════════════════════════════════════
+// FFC (Home Visit)
+// ═══════════════════════════════════════
+
+model FFCVisit {
+  id             String         @id @default(cuid())
+  patientId      String
+  patient        Patient        @relation(fields: [patientId], references: [id])
+  houseId        String?
+  house          House?         @relation(fields: [houseId], references: [id])
+  userId         String?
+  user           User?          @relation(fields: [userId], references: [id])
+  visitDate      DateTime       @default(now())
+  checkInLat     Float?
+  checkInLng     Float?
+  checkInAccuracy Float?
+  visitType      VisitType      @default(ROUTINE)
+  status         VisitStatus    @default(PLANNED)
+  notes          String?
+  voiceNoteUrl   String?
+  photoUrls      String?
+  checklist      String?
+  nextVisitDate  DateTime?
+  isOfflineSync  Boolean        @default(false)
+  offlineId      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([patientId])
+  @@index([houseId])
+  @@index([userId])
+  @@index([visitDate])
+  @@index([status])
+  @@index([offlineId])
+  @@index([checkInLat, checkInLng])
+}
+
+enum VisitType {
+  ROUTINE
+  FOLLOW_UP
+  EMERGENCY
+  ASSESSMENT
+  OTHER
+}
+
+enum VisitStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+// ═══════════════════════════════════════
+// GIS / SPATIAL
+// ═══════════════════════════════════════
+
+model RiskZone {
+  id          String       @id @default(cuid())
+  villageId   String
+  village     Village      @relation(fields: [villageId], references: [id])
+  name        String
+  level       RiskLevel    @default(NORMAL)
+  boundary    Unsupported("POLYGON")?
+  color       String       @default("#22c55e")
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([villageId])
+}
+
+model MapLayer {
+  id          String   @id @default(cuid())
+  name        String
+  type        String
+  visible     Boolean  @default(true)
+  opacity     Float    @default(1.0)
+  config      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════
+// SYNC MANAGEMENT
+// ═══════════════════════════════════════
+
+model SyncLog {
+  id          String    @id @default(cuid())
+  tableName   String
+  patientId   String?
+  patient     Patient?  @relation(fields: [patientId], references: [id])
+  action      SyncAction
+  status      SyncStatus
+  recordCount Int       @default(0)
+  error       String?
+  startedAt   DateTime
+  completedAt DateTime?
+  durationMs  Int?
+  createdAt   DateTime  @default(now())
+
+  @@index([tableName])
+  @@index([status])
+  @@index([startedAt])
+}
+
+enum SyncAction {
+  CREATE
+  UPDATE
+  DELETE
+  FULL_SYNC
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// ═══════════════════════════════════════
+// AUDIT
+// ═══════════════════════════════════════
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  action      String
+  resource    String
+  resourceId  String?
+  detail      String?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([resource, resourceId])
+}

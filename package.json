@@ -14,7 +14,7 @@
     "lint": "turbo lint",
     "test": "turbo test",
     "clean": "turbo clean",
-    "format": "prettier --write "**/*.{ts,tsx,md}"",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate deploy",
