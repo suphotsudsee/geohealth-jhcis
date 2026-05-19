@@ -13,10 +13,12 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
+# Copy cached deps — root hoisted + workspace node_modules (has .bin/next)
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json
 COPY --from=deps /app/package-lock.json ./package-lock.json
 COPY --from=deps /app/apps/web/package.json ./apps/web/package.json
+COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 
 COPY apps/web apps/web
 COPY services/prisma services/prisma
@@ -24,10 +26,9 @@ COPY services/prisma services/prisma
 # Generate Prisma client (absolute path from root /app)
 RUN /app/node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
 
-# Build Next.js from apps/web directory (binary at root /app/node_modules)
+# Build Next.js from apps/web directory (binary at apps/web/node_modules/.bin)
 WORKDIR /app/apps/web
-ENV PATH=/app/node_modules/.bin:$PATH
-RUN next build
+RUN node node_modules/.bin/next build
 
 # Stage 3: Runner
 FROM node:20-alpine AS runner
