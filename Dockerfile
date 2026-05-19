@@ -28,6 +28,6 @@ RUN echo "=== Building Next.js ===" && \
     echo "EXIT_CODE=$?"
 
 WORKDIR /app/apps/web/.next/standalone
-ENV PORT=3000
+ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
 CMD ["node", "server.js"]
