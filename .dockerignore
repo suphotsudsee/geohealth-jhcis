@@ -3,3 +3,4 @@ node_modules
 .next
 .env
 *.md
+apps/web/package-lock.json
