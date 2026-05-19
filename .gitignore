@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+.next/
+out/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.production
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Database
+prisma/migrations/
+
+# Docker
+docker-data/
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# MinIO
+minio-data/
+
+# Generated
+*.tsbuildinfo
+next-env.d.ts
+
+# Test coverage
+coverage/
+
+# Turbo
+.turbo/
