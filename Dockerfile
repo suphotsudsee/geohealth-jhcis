@@ -1,4 +1,4 @@
-# Stage 1: Install all dependencies
+# Stage 1: Install all dependencies (npm workspaces monorepo)
 FROM node:20-alpine AS deps
 WORKDIR /app
 
@@ -14,25 +14,25 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# Copy everything from deps
+# Copy root deps (hoisted packages)
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json
 COPY --from=deps /app/package-lock.json ./package-lock.json
 COPY --from=deps /app/apps/web/package.json ./apps/web/package.json
 
-# Copy source code
+# Copy source code (no node_modules — .gitignore handles that)
 COPY apps/web apps/web
 COPY services/prisma services/prisma
 
-# Create symlink so apps/web can resolve hoisted binaries
-RUN ln -sf /app/node_modules /app/apps/web/node_modules
+# Copy workspace node_modules from deps (has .bin/next symlink)
+COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 
 # Generate Prisma client
-RUN /app/node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
+RUN ./node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
 
-# Build Next.js — use PATH so next binary is found via hoisted node_modules
-ENV PATH=/app/node_modules/.bin:$PATH
-RUN cd apps/web && next build
+# Build Next.js from apps/web directory
+WORKDIR /app/apps/web
+RUN npx next build
 
 # Stage 3: Minimal production runner
 FROM node:20-alpine AS runner
