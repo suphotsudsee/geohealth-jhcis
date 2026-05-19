@@ -17,12 +17,19 @@ export async function GET(request: NextRequest) {
         name: true,
         moo: true,
         _count: { select: { houses: true } },
-        subDistrict: {
-          select: {
-            nameTh: true,
-            district: { select: { nameTh: true, province: { select: { nameTh: true } } } },
+          subDistrict: {
+            select: {
+              nameTh: true,
+              nameEn: true,
+              district: {
+                select: {
+                  nameTh: true,
+                  nameEn: true,
+                  province: { select: { nameTh: true, nameEn: true } },
+                },
+              },
+            },
           },
-        },
       },
       orderBy: { name: 'asc' },
     })
@@ -48,9 +55,9 @@ export async function GET(request: NextRequest) {
           villageCode: v.code,
           villageName: v.name,
           moo: v.moo,
-          subDistrict: v.subDistrict.nameTh,
-          district: v.subDistrict.district.nameTh,
-          province: v.subDistrict.district.province.nameTh,
+          subDistrict: v.subDistrict?.nameTh ?? v.subDistrict?.nameEn ?? 'N/A',
+          district: v.subDistrict?.district?.nameTh ?? v.subDistrict?.district?.nameEn ?? 'N/A',
+          province: v.subDistrict?.district?.province?.nameTh ?? v.subDistrict?.district?.province?.nameEn ?? 'N/A',
           totalHouses: v._count.houses,
           totalPopulation,
           chronicCount,
