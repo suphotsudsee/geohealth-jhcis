@@ -24,12 +24,15 @@ COPY --from=deps /app/apps/web/package.json ./apps/web/package.json
 COPY apps/web apps/web
 COPY services/prisma services/prisma
 
-# Generate Prisma client (use full path — npx may not resolve in monorepo)
+# Create symlink so apps/web can resolve hoisted binaries
+RUN ln -sf /app/node_modules /app/apps/web/node_modules
+
+# Generate Prisma client
 RUN /app/node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
 
-# Build Next.js from root with explicit directory path
-# WORKDIR stays at /app — next binary at /app/node_modules/.bin/next
-RUN /app/node_modules/.bin/next build apps/web
+# Build Next.js — use PATH so next binary is found via hoisted node_modules
+ENV PATH=/app/node_modules/.bin:$PATH
+RUN cd apps/web && next build
 
 # Stage 3: Minimal production runner
 FROM node:20-alpine AS runner
