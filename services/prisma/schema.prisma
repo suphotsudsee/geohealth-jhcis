@@ -106,8 +106,8 @@ model Village {
   code           String       @unique
   name           String
   moo            Int?
-  subDistrictCode String
-  subDistrict    SubDistrict  @relation(fields: [subDistrictCode], references: [code])
+  subDistrictCode String?
+  subDistrict    SubDistrict? @relation(fields: [subDistrictCode], references: [code])
   boundary       Unsupported("POLYGON")?
   centerLat      Float?
   centerLng      Float?

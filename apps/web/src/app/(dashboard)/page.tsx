@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
@@ -30,15 +30,27 @@ const MapView = dynamic(
 
 export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('')
+  const [stats, setStats] = useState<{totalPopulation: number; totalChronic: number; totalBedridden: number; totalRisk: number; ffcToday: number} | undefined>(undefined)
+  const [isLoading, setIsLoading] = useState(true)
   const activeLayers = useMapStore((s) => s.activeLayers)
   const toggleLayer = useMapStore((s) => s.toggleLayer)
+
+  useEffect(() => {
+    fetch('/api/v1/analytics/dashboard')
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.success) setStats(json.data)
+      })
+      .catch(console.error)
+      .finally(() => setIsLoading(false))
+  }, [])
 
   return (
     <div className="relative flex h-full flex-col">
       {/* Stats bar - hidden on mobile */}
       <div className="hidden md:block">
         <div className="px-4 pt-4">
-          <StatsCards />
+          <StatsCards stats={stats} isLoading={isLoading} />
         </div>
       </div>
 
