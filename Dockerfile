@@ -26,9 +26,10 @@ COPY services/prisma services/prisma
 # Generate Prisma client (absolute path from root /app)
 RUN /app/node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
 
-# Build Next.js from apps/web directory (npx finds next in root node_modules)
+# Build Next.js from apps/web directory (use NODE_PATH for hoisted deps)
 WORKDIR /app/apps/web
-RUN npx next build
+ENV NODE_PATH=/app/node_modules
+RUN /app/node_modules/.bin/next build
 
 # Stage 3: Runner
 FROM node:20-alpine AS runner
@@ -44,7 +45,11 @@ RUN adduser --system --uid 1001 nextjs
 COPY --from=builder /app/apps/web/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/package.json ./package.json
-COPY --from=builder --chown=nextjs:nodejs /app/apps/web/node_modules ./node_modules
+
+# Copy root node_modules (hoisted deps — next, react, etc.)
+COPY --from=builder /app/node_modules ./node_modules
+# Copy workspace-specific node_modules (plugins, configs)
+COPY --from=builder /app/apps/web/node_modules ./apps/web/node_modules
 
 # Copy Prisma schema for db push
 COPY --from=builder /app/services/prisma ./prisma
