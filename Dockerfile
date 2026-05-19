@@ -27,7 +27,7 @@ RUN echo "=== Building Next.js ===" && \
     node node_modules/.bin/next build 2>&1; \
     echo "EXIT_CODE=$?"
 
-WORKDIR /app/apps/web/.next/standalone
+WORKDIR /app/apps/web
 ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
-CMD ["node", "server.js"]
+CMD ["node", "node_modules/.bin/next", "start"]
