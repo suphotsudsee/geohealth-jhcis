@@ -33,6 +33,7 @@ prisma/migrations/
 
 # Docker
 docker-data/
+*.sql
 
 # Uploads
 uploads/*

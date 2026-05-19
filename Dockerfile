@@ -1,33 +1,59 @@
-# Debug Dockerfile — shows full build output
-FROM node:20-alpine
+# Production Dockerfile
+FROM node:20-alpine AS deps
 WORKDIR /app
 
-COPY . .
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
 
-RUN echo "=== Checking file structure ===" && \
-    ls -la && \
-    echo "--- apps/web ---" && \
-    ls -la apps/web/ && \
-    echo "--- services/prisma ---" && \
-    ls -la services/prisma/
+RUN npm ci
 
-RUN echo "=== Installing deps ===" && \
-    npm ci 2>&1
+FROM node:20-alpine AS builder
+WORKDIR /app
 
-RUN echo "=== Generating Prisma ===" && \
-    npx prisma generate --schema=services/prisma/schema.prisma 2>&1
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
 
-RUN echo "=== Checking next binary ===" && \
-    ls -la apps/web/node_modules/.bin/next && \
-    which next || echo "next not in PATH" && \
-    ls -la node_modules/.bin/next 2>/dev/null || echo "next not in root node_modules"
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/package.json ./package.json
+COPY --from=deps /app/package-lock.json ./package-lock.json
+COPY --from=deps /app/apps/web/package.json ./apps/web/package.json
 
-RUN echo "=== Building Next.js ===" && \
-    cd apps/web && \
-    node node_modules/.bin/next build 2>&1; \
-    echo "EXIT_CODE=$?"
+COPY apps/web apps/web
+COPY services/prisma services/prisma
 
+# Generate Prisma client
+RUN ./node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
+
+# Build Next.js
 WORKDIR /app/apps/web
+RUN ./node_modules/.bin/next build
+
+# Stage 3: Runner
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# Copy built Next.js output
+COPY --from=builder /app/apps/web/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next ./.next
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/package.json ./package.json
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/node_modules ./node_modules
+
+# Copy Prisma schema for db push
+COPY --from=builder /app/services/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+
+# Start script: push Prisma schema then run Next.js
+RUN printf '#!/bin/sh\nset -e\nnpx --yes prisma db push --schema=./prisma/schema.prisma --accept-data-loss 2>&1\necho "Schema pushed OK"\nexec node node_modules/.bin/next start\n' > /app/start.sh && chmod +x /app/start.sh
+
+USER nextjs
+EXPOSE 3001
 ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
-CMD ["node", "node_modules/.bin/next", "start"]
+
+CMD ["/app/start.sh"]
