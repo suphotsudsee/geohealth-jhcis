@@ -3,6 +3,10 @@ import type { NextConfig } from 'next'
 const nextConfig: NextConfig = {
   experimental: {
     serverActions: { bodySizeLimit: '10mb' },
+    // @ts-expect-error - turbopack.root is valid in Next.js 16 runtime (monorepo fix)
+    turbopack: {
+      root: '..',
+    },
   },
   images: {
     remotePatterns: [
