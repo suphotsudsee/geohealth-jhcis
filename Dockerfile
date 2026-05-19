@@ -1,4 +1,4 @@
-# Stage 1: Dependencies
+# Stage 1: Install all dependencies
 FROM node:20-alpine AS deps
 WORKDIR /app
 
@@ -7,33 +7,31 @@ COPY apps/web/package.json apps/web/package.json
 
 RUN npm ci
 
-# Stage 2: Build
+# Stage 2: Build Next.js
 FROM node:20-alpine AS builder
 WORKDIR /app
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# Copy cached deps
+# Copy everything from deps
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json
 COPY --from=deps /app/package-lock.json ./package-lock.json
-
-# Copy workspace package configs
-COPY apps/web/package.json apps/web/package.json
+COPY --from=deps /app/apps/web/package.json ./apps/web/package.json
 
 # Copy source code
 COPY apps/web apps/web
 COPY services/prisma services/prisma
 
-# Generate Prisma client
-RUN npx prisma generate --schema=services/prisma/schema.prisma
+# Generate Prisma client (use full path — npx may not resolve in monorepo)
+RUN /app/node_modules/.bin/prisma generate --schema=services/prisma/schema.prisma
 
-# Build Next.js app (uses output: standalone)
-WORKDIR /app/apps/web
-RUN npx next build
+# Build Next.js from root with explicit directory path
+# WORKDIR stays at /app — next binary at /app/node_modules/.bin/next
+RUN /app/node_modules/.bin/next build apps/web
 
-# Stage 3: Runner
+# Stage 3: Minimal production runner
 FROM node:20-alpine AS runner
 WORKDIR /app
 
