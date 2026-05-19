@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - DATABASE_URL=${DATABASE_URL}
+      - JHCIS_DATABASE_URL=${JHCIS_DATABASE_URL}
+      - JHCIS_DB_HOST=${JHCIS_DB_HOST}
+      - JHCIS_DB_PORT=${JHCIS_DB_PORT}
+      - JHCIS_DB_USER=${JHCIS_DB_USER}
+      - JHCIS_DB_PASSWORD=${JHCIS_DB_PASSWORD}
+      - JHCIS_DB_NAME=${JHCIS_DB_NAME}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
