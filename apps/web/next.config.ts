@@ -1,8 +1,14 @@
 import path from 'node:path'
 import type { NextConfig } from 'next'
 
+const defaultDevOrigins = ['192.168.1.82', '192.168.1.196']
+const allowedDevOrigins =
+  process.env.NEXT_DEV_ALLOWED_ORIGINS?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean) ?? defaultDevOrigins
+
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['192.168.1.196'],
+  allowedDevOrigins,
   experimental: {
     serverActions: { bodySizeLimit: '10mb' },
   },

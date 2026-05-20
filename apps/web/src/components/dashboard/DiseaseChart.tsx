@@ -14,17 +14,20 @@ import { DISEASE_COLORS } from '@/lib/constants'
 
 export interface DiseaseData {
   name: string
+  label?: string
   count: number
 }
 
 interface DiseaseChartProps {
   data: DiseaseData[]
   title?: string
+  onDiseaseSelect?: (disease: DiseaseData) => void
 }
 
 export default function DiseaseChart({
   data,
   title = 'การกระจายตัวของโรค',
+  onDiseaseSelect,
 }: DiseaseChartProps) {
   if (!data || data.length === 0) {
     return (
@@ -43,9 +46,15 @@ export default function DiseaseChart({
 
   const chartData = data.map((d) => ({
     name: d.name,
+    label: d.label,
     count: d.count,
     fill: DISEASE_COLORS[d.name] || '#6b7280',
   }))
+
+  const handleBarClick = (item: unknown) => {
+    const payload = (item as { payload?: DiseaseData } | undefined)?.payload
+    if (payload) onDiseaseSelect?.(payload)
+  }
 
   return (
     <Card>
@@ -75,7 +84,13 @@ export default function DiseaseChart({
                 }}
                 formatter={(value: number) => [value.toLocaleString(), 'จำนวน']}
               />
-              <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={48} />
+              <Bar
+                dataKey="count"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={48}
+                className={onDiseaseSelect ? 'cursor-pointer' : undefined}
+                onClick={handleBarClick}
+              />
             </BarChart>
           </ResponsiveContainer>
         </div>

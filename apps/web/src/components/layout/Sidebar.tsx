@@ -17,6 +17,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth.store'
+import { useFacilityInfo } from '@/hooks/useFacilityInfo'
 
 interface SidebarProps {
   collapsed: boolean
@@ -33,9 +34,30 @@ const navItems = [
   { href: '/admin', label: 'จัดการระบบ', icon: Shield, adminOnly: true },
 ]
 
+function FacilityBrand({ facility }: { facility: ReturnType<typeof useFacilityInfo> }) {
+  const locationLine = [facility.subDistrictName && `ต. ${facility.subDistrictName}`, facility.districtName && `อ. ${facility.districtName}`]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <div className="min-w-0 leading-tight">
+      <div className="truncate text-sm font-bold" title={facility.name}>
+        {facility.name}
+      </div>
+      <div className="truncate text-xs font-medium text-muted-foreground" title={locationLine}>
+        {locationLine || ' '}
+      </div>
+      <div className="truncate text-xs font-medium text-muted-foreground" title={facility.provinceName ?? ''}>
+        {facility.provinceName ? `จ. ${facility.provinceName}` : ' '}
+      </div>
+    </div>
+  )
+}
+
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname()
   const user = useAuthStore((s) => s.user)
+  const facility = useFacilityInfo()
 
   const isActive = (href: string, exact?: boolean) => {
     if (exact) return pathname === href
@@ -52,14 +74,15 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Logo */}
       <div
         className={cn(
-          'flex h-14 items-center border-b px-4',
+          'flex items-center border-b px-4',
+          collapsed ? 'h-14' : 'h-20',
           collapsed ? 'justify-center' : 'justify-between'
         )}
       >
         {!collapsed && (
-          <Link href="/" className="flex items-center gap-2 font-bold text-lg">
+          <Link href="/" className="flex min-w-0 flex-1 items-center gap-2">
             <Map className="h-5 w-5 text-primary" />
-            <span>GeoHealth</span>
+            <FacilityBrand facility={facility} />
           </Link>
         )}
         {collapsed && (

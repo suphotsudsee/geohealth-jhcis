@@ -106,3 +106,18 @@ export function genderFromJhcis(sex: unknown) {
 export function riskFromChronic(chronicCount: unknown) {
   return Number(chronicCount || 0) > 0 ? 'HIGH' : 'NORMAL'
 }
+
+export function riskFromHouseFactors({
+  bedriddenCount,
+  chronicCount,
+  elderlyCount,
+}: {
+  bedriddenCount: unknown
+  chronicCount: unknown
+  elderlyCount: unknown
+}) {
+  if (Number(bedriddenCount || 0) > 0) return 'CRITICAL'
+  if (Number(chronicCount || 0) > 0) return 'HIGH'
+  if (Number(elderlyCount || 0) > 0) return 'MEDIUM'
+  return 'NORMAL'
+}

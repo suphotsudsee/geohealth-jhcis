@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -67,6 +68,9 @@ function markerResidents(value: unknown) {
       name: markerText(data.name),
       age: data.age === null || data.age === undefined ? null : Number(data.age),
       chronicDisease: data.chronicDisease === true,
+      chronicDiseases: Array.isArray(data.chronicDiseases)
+        ? data.chronicDiseases.map((disease) => markerText(disease)).filter((disease) => disease !== '-')
+        : [],
       bedridden: data.bedridden === true,
       gender: markerText(data.gender, 'ไม่ระบุ'),
     }]
@@ -78,6 +82,9 @@ function riskBadgeVariant(riskLevel: string) {
 }
 
 export default function HomePage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const diseaseCode = searchParams.get('disease')?.trim() || ''
   const [searchQuery, setSearchQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState<StatCardFilter>('population')
   const [selectedHouseMarker, setSelectedHouseMarker] = useState<MarkerData | null>(null)
@@ -99,13 +106,23 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/v1/map/markers')
+    const params = new URLSearchParams()
+    if (diseaseCode) params.set('chronicCode', diseaseCode)
+
+    fetch(`/api/v1/map/markers${params.size ? `?${params.toString()}` : ''}`)
       .then((res) => res.json())
       .then((json) => {
         if (json.success && Array.isArray(json.data)) setMarkers(json.data)
       })
       .catch(console.error)
-  }, [])
+  }, [diseaseCode])
+
+  useEffect(() => {
+    if (diseaseCode) {
+      setActiveFilter('chronic')
+      setLayerActive('markers', true)
+    }
+  }, [diseaseCode, setLayerActive])
 
   const filteredMarkers = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase()
@@ -162,7 +179,7 @@ export default function HomePage() {
             <MapCluster
               markers={filteredMarkers}
               fitBoundsOnLoad
-              fitBoundsKey={`${activeFilter}:${searchQuery}:${filteredMarkers.length}`}
+              fitBoundsKey={`${activeFilter}:${diseaseCode}:${searchQuery}:${filteredMarkers.length}`}
               onMarkerClick={setSelectedHouseMarker}
             />
           )}
@@ -185,13 +202,13 @@ export default function HomePage() {
           <CardContent className="flex items-center gap-2 p-2 pl-3">
             <div className="min-w-0">
               <p className="truncate text-xs font-medium">
-                {filterLabels[activeFilter]}
+                {diseaseCode ? `โรค ${diseaseCode}` : filterLabels[activeFilter]}
               </p>
               <p className="text-[11px] text-muted-foreground">
                 {filteredMarkers.length.toLocaleString()} จุดบนแผนที่
               </p>
             </div>
-            {activeFilter !== 'population' || searchQuery ? (
+            {activeFilter !== 'population' || searchQuery || diseaseCode ? (
               <Button
                 type="button"
                 variant="ghost"
@@ -200,6 +217,7 @@ export default function HomePage() {
                 onClick={() => {
                   setActiveFilter('population')
                   setSearchQuery('')
+                  if (diseaseCode) router.push('/')
                 }}
                 aria-label="ล้างตัวกรอง"
               >
@@ -245,24 +263,27 @@ export default function HomePage() {
         </Card>
 
         {/* Legend */}
-        <Card className="absolute bottom-4 left-4 z-[1000] hidden md:block">
+        <Card className="absolute bottom-4 left-4 z-[1000] hidden w-72 md:block">
           <CardContent className="p-3">
             <p className="text-xs font-medium mb-1.5">คำอธิบาย</p>
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-2">
               {[
-                { color: '#ef4444', label: 'วิกฤติ' },
-                { color: '#f97316', label: 'สูง' },
-                { color: '#eab308', label: 'ปานกลาง' },
-                { color: '#22c55e', label: 'ปกติ' },
+                { color: '#ef4444', label: 'วิกฤติ', description: 'มีผู้ป่วยติดเตียงในบ้านอย่างน้อย 1 คน' },
+                { color: '#f97316', label: 'สูง', description: 'ไม่มีผู้ป่วยติดเตียง แต่มีผู้ป่วยโรคเรื้อรังอย่างน้อย 1 คน' },
+                { color: '#eab308', label: 'ปานกลาง', description: 'ไม่มีผู้ป่วยติดเตียงหรือโรคเรื้อรัง แต่มีผู้สูงอายุ 60 ปีขึ้นไป' },
+                { color: '#22c55e', label: 'ปกติ', description: 'ไม่พบผู้ป่วยติดเตียง โรคเรื้อรัง หรือผู้สูงอายุ 60 ปีขึ้นไป' },
               ].map((item) => (
-                <div key={item.label} className="flex items-center gap-1.5">
+                <div key={item.label} className="flex items-start gap-2">
                   <div
-                    className="h-2.5 w-2.5 rounded-full"
+                    className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
                     style={{ backgroundColor: item.color }}
                   />
-                  <span className="text-xs text-muted-foreground">
-                    {item.label}
-                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium leading-none">{item.label}</p>
+                    <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                      {item.description}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
@@ -367,13 +388,25 @@ export default function HomePage() {
                 {selectedResidents.map((resident, index) => (
                   <div
                     key={`${resident.name}-${index}`}
-                    className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-2 text-sm"
+                    className="grid grid-cols-[1fr_auto_auto] items-start gap-3 py-2 text-sm"
                   >
                     <div className="min-w-0">
                       <p className="font-medium">{resident.name}</p>
                       {resident.chronicDisease || resident.bedridden ? (
                         <div className="mt-1 flex flex-wrap gap-1">
-                          {resident.chronicDisease ? (
+                          {resident.chronicDiseases.length > 0
+                            ? resident.chronicDiseases.map((disease) => (
+                                <Badge
+                                  key={`${resident.name}-${disease}`}
+                                  variant="destructive"
+                                  className="max-w-full px-2 py-0 text-[10px]"
+                                  title={disease}
+                                >
+                                  <span className="truncate">{disease}</span>
+                                </Badge>
+                              ))
+                            : null}
+                          {resident.chronicDiseases.length === 0 && resident.chronicDisease ? (
                             <Badge variant="destructive" className="px-2 py-0 text-[10px]">
                               โรคเรื้อรัง
                             </Badge>

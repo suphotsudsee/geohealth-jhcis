@@ -1,10 +1,11 @@
 'use client'
 
 import StatsCards from '@/components/dashboard/StatsCards'
-import DiseaseChart from '@/components/dashboard/DiseaseChart'
+import DiseaseChart, { type DiseaseData } from '@/components/dashboard/DiseaseChart'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useQuery } from '@tanstack/react-query'
 import { MapPin, Users, Activity } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 
 async function fetchDashboardStats() {
   const res = await fetch('/api/v1/analytics/dashboard')
@@ -25,6 +26,7 @@ async function fetchDiseaseData() {
 }
 
 export default function DashboardPage() {
+  const router = useRouter()
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: fetchDashboardStats,
@@ -63,7 +65,12 @@ export default function DashboardPage() {
       {/* Charts row */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <div className="md:col-span-2">
-          <DiseaseChart data={diseaseData || []} />
+          <DiseaseChart
+            data={diseaseData || []}
+            onDiseaseSelect={(disease: DiseaseData) => {
+              router.push(`/?disease=${encodeURIComponent(disease.name)}`)
+            }}
+          />
         </div>
 
         {/* Quick stats */}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { RowDataPacket } from 'mysql2/promise'
-import { jhcisHouseId, jhcisQuery, normalizeJhcisCoordinate, riskFromChronic } from '@/lib/jhcis'
+import { jhcisHouseId, jhcisQuery, normalizeJhcisCoordinate, riskFromHouseFactors } from '@/lib/jhcis'
 import type { MarkerData } from '@/types/api'
 
 export const runtime = 'nodejs'
@@ -14,6 +14,7 @@ type MarkerRow = RowDataPacket & {
   villageName: string | null
   peopleCount: number
   chronicCount: number
+  elderlyCount: number
   bedriddenCount: number
   ffcTodayCount: number
   residentNames: string | null
@@ -32,13 +33,19 @@ function parseResidentDetails(details: string | null) {
   return details
     .split('\n')
     .map((item) => {
-      const [name, age, genderCode] = item.split('\t')
+      const [name, age, genderCode, chronicFlag, bedriddenFlag, chronicDiseases] = item.split('\t')
       return {
         name: name || '-',
         age: age ? Number(age) : null,
         gender: genderLabelFromJhcis(genderCode),
-        chronicDisease: item.split('\t')[3] === '1',
-        bedridden: item.split('\t')[4] === '1',
+        chronicDisease: chronicFlag === '1',
+        bedridden: bedriddenFlag === '1',
+        chronicDiseases: chronicDiseases
+          ? chronicDiseases
+              .split('||')
+              .map((disease) => disease.trim())
+              .filter(Boolean)
+          : [],
       }
     })
     .filter((resident) => resident.name !== '-')
@@ -48,13 +55,30 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const villageId = searchParams.get('villageId')
+    const chronicCode = searchParams.get('chronicCode')?.trim()
 
     const where = ["COALESCE(h.xgis, '') <> ''", "COALESCE(h.ygis, '') <> ''"]
-    const params: unknown[] = []
+    const whereParams: unknown[] = []
     if (villageId) {
       where.push('h.villcode = ?')
-      params.push(villageId)
+      whereParams.push(villageId)
     }
+    if (chronicCode) {
+      where.push(
+        `EXISTS (
+          SELECT 1
+          FROM person px
+          INNER JOIN personchronic pcx ON pcx.pcucodeperson = px.pcucodeperson AND pcx.pid = px.pid
+          WHERE px.pcucodeperson = h.pcucode AND px.hcode = h.hcode AND pcx.chroniccode = ?
+        )`
+      )
+      whereParams.push(chronicCode)
+    }
+
+    const chronicJoinCondition = chronicCode
+      ? 'pc.pcucodeperson = p.pcucodeperson AND pc.pid = p.pid AND pc.chroniccode = ?'
+      : 'pc.pcucodeperson = p.pcucodeperson AND pc.pid = p.pid'
+    const params = chronicCode ? [chronicCode, ...whereParams] : whereParams
 
     const rows = await jhcisQuery<MarkerRow>(
       `SELECT
@@ -66,6 +90,7 @@ export async function GET(request: NextRequest) {
         v.villname AS villageName,
         COUNT(DISTINCT p.pid) AS peopleCount,
         COUNT(DISTINCT pc.pid) AS chronicCount,
+        COUNT(DISTINCT CASE WHEN TIMESTAMPDIFF(YEAR, p.birth, CURDATE()) >= 60 THEN p.pid END) AS elderlyCount,
         COUNT(DISTINCT pu.pid) AS bedriddenCount,
         COUNT(DISTINCT CONCAT(vt.pcucode, ':', vt.visitno)) AS ffcTodayCount,
         GROUP_CONCAT(
@@ -80,7 +105,17 @@ export async function GET(request: NextRequest) {
             COALESCE(TIMESTAMPDIFF(YEAR, p.birth, CURDATE()), ''),
             COALESCE(p.sex, ''),
             IF(pc.pid IS NULL, '0', '1'),
-            IF(pu.pid IS NULL, '0', '1')
+            IF(pu.pid IS NULL, '0', '1'),
+            COALESCE((
+              SELECT GROUP_CONCAT(
+                DISTINCT CONCAT(pc2.chroniccode, ' ', COALESCE(cd.diseasenamethai, cd.diseasename, pc2.chroniccode))
+                ORDER BY pc2.chroniccode
+                SEPARATOR '||'
+              )
+              FROM personchronic pc2
+              LEFT JOIN cdisease cd ON cd.diseasecode = pc2.chroniccode
+              WHERE pc2.pcucodeperson = p.pcucodeperson AND pc2.pid = p.pid
+            ), '')
           )
           ORDER BY p.fname, p.lname
           SEPARATOR '\n'
@@ -88,7 +123,7 @@ export async function GET(request: NextRequest) {
       FROM house h
       LEFT JOIN village v ON v.pcucode = h.pcucode AND v.villcode = h.villcode
       LEFT JOIN person p ON p.pcucodeperson = h.pcucode AND p.hcode = h.hcode
-      LEFT JOIN personchronic pc ON pc.pcucodeperson = p.pcucodeperson AND pc.pid = p.pid
+      LEFT JOIN personchronic pc ON ${chronicJoinCondition}
       LEFT JOIN personunable pu ON pu.pcucodeperson = p.pcucodeperson AND pu.pid = p.pid
       LEFT JOIN visit vt ON vt.pcucodeperson = p.pcucodeperson AND vt.pid = p.pid AND vt.visitdate = CURDATE()
       WHERE ${where.join(' AND ')}
@@ -103,6 +138,7 @@ export async function GET(request: NextRequest) {
 
       const houseId = jhcisHouseId(row.pcucode, row.hcode)
       const chronicCount = Number(row.chronicCount || 0)
+      const elderlyCount = Number(row.elderlyCount || 0)
       const bedriddenCount = Number(row.bedriddenCount || 0)
       const ffcTodayCount = Number(row.ffcTodayCount || 0)
 
@@ -111,7 +147,7 @@ export async function GET(request: NextRequest) {
         lat: coord.lat,
         lng: coord.lng,
         type: 'house' as const,
-        riskLevel: riskFromChronic(chronicCount) as MarkerData['riskLevel'],
+        riskLevel: riskFromHouseFactors({ bedriddenCount, chronicCount, elderlyCount }) as MarkerData['riskLevel'],
         label: `บ้านเลขที่ ${row.houseNo || '-'}`,
         popupData: {
           houseId,
@@ -122,6 +158,7 @@ export async function GET(request: NextRequest) {
           villageName: row.villageName,
           peopleCount: Number(row.peopleCount || 0),
           chronicCount,
+          elderlyCount,
           bedriddenCount,
           ffcTodayCount,
           residentNames: row.residentNames,
