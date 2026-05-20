@@ -1,30 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import type { RowDataPacket } from 'mysql2/promise'
+import { genderFromJhcis, jhcisHouseId, jhcisPersonId, jhcisQuery, normalizeJhcisCoordinate, riskFromChronic } from '@/lib/jhcis'
 import type { MarkerData } from '@/types/api'
 
 export const runtime = 'nodejs'
 
-const THAILAND_BOUNDS = {
-  minLat: 5,
-  maxLat: 21,
-  minLng: 97,
-  maxLng: 106,
-}
-
-function isValidThaiCoordinate(lat: number, lng: number) {
-  return (
-    lat >= THAILAND_BOUNDS.minLat &&
-    lat <= THAILAND_BOUNDS.maxLat &&
-    lng >= THAILAND_BOUNDS.minLng &&
-    lng <= THAILAND_BOUNDS.maxLng
-  )
-}
-
-function normalizeCoordinate(lat: number | null, lng: number | null) {
-  if (lat === null || lng === null) return null
-  if (isValidThaiCoordinate(lat, lng)) return { lat, lng }
-  if (isValidThaiCoordinate(lng, lat)) return { lat: lng, lng: lat }
-  return null
+type MarkerRow = RowDataPacket & {
+  pcucode: string
+  hcode: number
+  houseNo: string | null
+  xgis: string | null
+  ygis: string | null
+  villageName: string | null
+  personPcucode: string | null
+  pid: number | null
+  cid: string | null
+  firstName: string | null
+  lastName: string | null
+  age: number | null
+  genderCode: string | null
+  chronicCount: number
 }
 
 export async function GET(request: NextRequest) {
@@ -32,135 +27,68 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const villageId = searchParams.get('villageId')
 
-    const swLat = searchParams.get('sw_lat')
-    const swLng = searchParams.get('sw_lng')
-    const neLat = searchParams.get('ne_lat')
-    const neLng = searchParams.get('ne_lng')
-
-    const patientWhere: Record<string, unknown> = {
-      lat: { not: null },
-      lng: { not: null },
-    }
-
+    const where = ["COALESCE(h.xgis, '') <> ''", "COALESCE(h.ygis, '') <> ''"]
+    const params: unknown[] = []
     if (villageId) {
-      patientWhere.house = { villageId }
+      where.push('h.villcode = ?')
+      params.push(villageId)
     }
 
-    if (swLat && swLng && neLat && neLng) {
-      const parsedSwLat = parseFloat(swLat)
-      const parsedSwLng = parseFloat(swLng)
-      const parsedNeLat = parseFloat(neLat)
-      const parsedNeLng = parseFloat(neLng)
+    const rows = await jhcisQuery<MarkerRow>(
+      `SELECT
+        h.pcucode,
+        h.hcode,
+        h.hno AS houseNo,
+        h.xgis,
+        h.ygis,
+        v.villname AS villageName,
+        p.pcucodeperson AS personPcucode,
+        p.pid,
+        p.idcard AS cid,
+        p.fname AS firstName,
+        p.lname AS lastName,
+        TIMESTAMPDIFF(YEAR, p.birth, CURDATE()) AS age,
+        p.sex AS genderCode,
+        COUNT(pc.chroniccode) AS chronicCount
+      FROM house h
+      LEFT JOIN village v ON v.pcucode = h.pcucode AND v.villcode = h.villcode
+      LEFT JOIN person p ON p.pcucodeperson = h.pcucode AND p.hcode = h.hcode
+      LEFT JOIN personchronic pc ON pc.pcucodeperson = p.pcucodeperson AND pc.pid = p.pid
+      WHERE ${where.join(' AND ')}
+      GROUP BY h.pcucode, h.hcode, h.hno, h.xgis, h.ygis, v.villname, p.pcucodeperson, p.pid, p.idcard, p.fname, p.lname, p.birth, p.sex
+      LIMIT 10000`,
+      params
+    )
 
-      if (!isNaN(parsedSwLat) && !isNaN(parsedSwLng) && !isNaN(parsedNeLat) && !isNaN(parsedNeLng)) {
-        patientWhere.lat = { gte: Math.min(parsedSwLat, parsedNeLat), lte: Math.max(parsedSwLat, parsedNeLat) }
-        patientWhere.lng = { gte: Math.min(parsedSwLng, parsedNeLng), lte: Math.max(parsedSwLng, parsedNeLng) }
-      }
-    }
+    const markers: MarkerData[] = rows.flatMap((row) => {
+      const coord = normalizeJhcisCoordinate(row.xgis, row.ygis)
+      if (coord.lat === null || coord.lng === null) return []
 
-    const patients = await prisma.patient.findMany({
-      where: patientWhere as any,
-      select: {
-        id: true,
-        lat: true,
-        lng: true,
-        riskLevel: true,
-        fullName: true,
-        cid: true,
-        age: true,
-        gender: true,
-        chronicDisease: true,
-        bedridden: true,
-        house: {
-          select: {
-            houseNo: true,
-            village: { select: { name: true } },
-          },
-        },
-      },
-      take: 10000,
-    })
-
-    const houseWhere: Record<string, unknown> = {
-      lat: { not: null },
-      lng: { not: null },
-    }
-    if (villageId) {
-      houseWhere.villageId = villageId
-    }
-    if (swLat && swLng && neLat && neLng) {
-      const parsedSwLat = parseFloat(swLat)
-      const parsedSwLng = parseFloat(swLng)
-      const parsedNeLat = parseFloat(neLat)
-      const parsedNeLng = parseFloat(neLng)
-      if (!isNaN(parsedSwLat) && !isNaN(parsedSwLng) && !isNaN(parsedNeLat) && !isNaN(parsedNeLng)) {
-        houseWhere.lat = { gte: Math.min(parsedSwLat, parsedNeLat), lte: Math.max(parsedSwLat, parsedNeLat) }
-        houseWhere.lng = { gte: Math.min(parsedSwLng, parsedNeLng), lte: Math.max(parsedSwLng, parsedNeLng) }
-      }
-    }
-
-    const houses = await prisma.house.findMany({
-      where: houseWhere as any,
-      select: {
-        id: true,
-        lat: true,
-        lng: true,
-        riskLevel: true,
-        houseNo: true,
-        village: { select: { name: true } },
-      },
-      take: 10000,
-    })
-
-    const patientMarkers: MarkerData[] = patients.flatMap((patient) => {
-      const coord = normalizeCoordinate(patient.lat, patient.lng)
-      if (!coord) return []
-
+      const hasPatient = row.personPcucode && row.pid !== null
+      const fullName = [row.firstName, row.lastName].filter(Boolean).join(' ')
       return [{
-        id: patient.id,
+        id: hasPatient ? jhcisPersonId(row.personPcucode as string, row.pid as number) : jhcisHouseId(row.pcucode, row.hcode),
         lat: coord.lat,
         lng: coord.lng,
-        type: 'patient' as const,
-        riskLevel: patient.riskLevel,
-        label: patient.fullName,
+        type: hasPatient ? 'patient' as const : 'house' as const,
+        riskLevel: riskFromChronic(row.chronicCount) as MarkerData['riskLevel'],
+        label: hasPatient ? fullName : `บ้านเลขที่ ${row.houseNo || ''}`,
         popupData: {
-          cid: patient.cid,
-          age: patient.age,
-          gender: patient.gender,
-          chronicDisease: patient.chronicDisease,
-          bedridden: patient.bedridden,
-          houseNo: patient.house?.houseNo,
-          villageName: patient.house?.village?.name,
+          cid: row.cid,
+          age: row.age,
+          gender: hasPatient ? genderFromJhcis(row.genderCode) : undefined,
+          chronicDisease: Number(row.chronicCount || 0) > 0,
+          houseNo: row.houseNo,
+          villageName: row.villageName,
         },
       }]
     })
 
-    const existingPatientHouseNos = new Set(patients.filter((patient) => patient.house).map((patient) => patient.house?.houseNo))
-    const houseMarkers: MarkerData[] = houses
-      .filter((house) => !existingPatientHouseNos.has(house.houseNo))
-      .flatMap((house) => {
-        const coord = normalizeCoordinate(house.lat, house.lng)
-        if (!coord) return []
-
-        return [{
-          id: house.id,
-          lat: coord.lat,
-          lng: coord.lng,
-          type: 'house' as const,
-          riskLevel: house.riskLevel,
-          label: `บ้านเลขที่ ${house.houseNo || ''}`,
-          popupData: {
-            houseNo: house.houseNo,
-            villageName: house.village?.name,
-          },
-        }]
-      })
-
-    return NextResponse.json({ success: true, data: [...patientMarkers, ...houseMarkers] })
+    return NextResponse.json({ success: true, data: markers })
   } catch (error) {
     console.error('GET /api/v1/map/markers error:', error)
     return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch markers' } },
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch markers from JHCIS' } },
       { status: 500 }
     )
   }

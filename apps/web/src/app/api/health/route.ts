@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { jhcisQuery } from '@/lib/jhcis'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -10,13 +10,14 @@ export async function GET() {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     version: '1.0.0',
+    databaseName: process.env.JHCIS_DB_NAME,
   }
 
   try {
-    await prisma.$queryRaw`SELECT 1`
-    checks.database = 'connected'
+    await jhcisQuery('SELECT 1 AS ok')
+    checks.database = 'jhcisdb connected'
   } catch {
-    checks.database = 'disconnected'
+    checks.database = 'jhcisdb disconnected'
     checks.status = 'degraded'
   }
 

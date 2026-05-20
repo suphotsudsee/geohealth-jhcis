@@ -2,17 +2,40 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth'
 
 const publicPaths = [
+  '/',
   '/login',
+  '/dashboard',
+  '/analytics',
+  '/households',
+  '/patients',
+  '/ffc',
+  '/reports',
   '/api/v1/auth/login',
   '/api/v1/auth/refresh',
   '/api/health',
+]
+
+const publicReadApiPrefixes = [
+  '/api/v1/analytics',
+  '/api/v1/map',
+  '/api/v1/patients',
+  '/api/v1/houses',
+  '/api/v1/villages',
+  '/api/v1/ffc',
 ]
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Skip public paths
-  if (publicPaths.some((p) => pathname.startsWith(p))) {
+  if (publicPaths.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+    return NextResponse.next()
+  }
+
+  if (
+    request.method === 'GET' &&
+    publicReadApiPrefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+  ) {
     return NextResponse.next()
   }
 

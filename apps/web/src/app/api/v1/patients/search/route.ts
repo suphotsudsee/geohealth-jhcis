@@ -1,15 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
-import { getUserFromRequest } from '@/lib/rbac'
+import type { RowDataPacket } from 'mysql2/promise'
+import { genderFromJhcis, jhcisPersonId, jhcisQuery, normalizeJhcisCoordinate, riskFromChronic } from '@/lib/jhcis'
 import type { ApiResponse, PatientSummary } from '@/types/api'
 
 export const runtime = 'nodejs'
 
+type PatientRow = RowDataPacket & {
+  pcucodeperson: string
+  pid: number
+  cid: string | null
+  hn: string | null
+  firstName: string | null
+  lastName: string | null
+  age: number | null
+  genderCode: string | null
+  xgis: string | null
+  ygis: string | null
+  houseNo: string | null
+  villageName: string | null
+  chronicCount: number
+}
+
 export async function GET(request: NextRequest) {
   try {
-    const user = getUserFromRequest(request)
     const { searchParams } = new URL(request.url)
     const q = searchParams.get('q')?.trim()
+    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get('limit') || '20')))
 
     if (!q) {
       return NextResponse.json(
@@ -18,104 +34,55 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Scope filter
-    const scopeFilter: Record<string, unknown> = {}
-    if (user && user.role !== 'ADMIN') {
-      if (user.scope?.village) {
-        scopeFilter.house = { village: { code: user.scope.village } }
-      } else if (user.scope?.district) {
-        scopeFilter.house = { village: { subDistrict: { districtCode: user.scope.district } } }
+    const like = `%${q}%`
+    const rows = await jhcisQuery<PatientRow>(
+      `SELECT
+        p.pcucodeperson,
+        p.pid,
+        p.idcard AS cid,
+        CAST(p.pid AS CHAR) AS hn,
+        p.fname AS firstName,
+        p.lname AS lastName,
+        TIMESTAMPDIFF(YEAR, p.birth, CURDATE()) AS age,
+        p.sex AS genderCode,
+        h.xgis,
+        h.ygis,
+        h.hno AS houseNo,
+        v.villname AS villageName,
+        COUNT(pc.chroniccode) AS chronicCount
+      FROM person p
+      LEFT JOIN house h ON h.pcucode = p.pcucodeperson AND h.hcode = p.hcode
+      LEFT JOIN village v ON v.pcucode = h.pcucode AND v.villcode = h.villcode
+      LEFT JOIN personchronic pc ON pc.pcucodeperson = p.pcucodeperson AND pc.pid = p.pid
+      WHERE (p.idcard LIKE ? OR CAST(p.pid AS CHAR) LIKE ? OR p.fname LIKE ? OR p.lname LIKE ? OR CONCAT(p.fname, ' ', p.lname) LIKE ?)
+      GROUP BY p.pcucodeperson, p.pid, p.idcard, p.fname, p.lname, p.birth, p.sex, h.xgis, h.ygis, h.hno, v.villname
+      ORDER BY p.dateupdate DESC
+      LIMIT ?`,
+      [like, like, like, like, like, limit]
+    )
+
+    const data: PatientSummary[] = rows.map((p) => {
+      const coord = normalizeJhcisCoordinate(p.xgis, p.ygis)
+      return {
+        id: jhcisPersonId(p.pcucodeperson, p.pid),
+        cid: p.cid,
+        hn: p.hn,
+        fullName: [p.firstName, p.lastName].filter(Boolean).join(' ') || '-',
+        age: p.age,
+        gender: genderFromJhcis(p.genderCode) as PatientSummary['gender'],
+        riskLevel: riskFromChronic(p.chronicCount) as PatientSummary['riskLevel'],
+        lat: coord.lat,
+        lng: coord.lng,
+        house: { houseNo: p.houseNo, village: { name: p.villageName } },
       }
-    }
-
-    const isCID = /^\d{13}$/.test(q)
-
-    if (isCID) {
-      const patient = await prisma.patient.findUnique({
-        where: { cid: q },
-        include: {
-          house: {
-            include: {
-              village: { select: { id: true, name: true, code: true } },
-            },
-          },
-        },
-      })
-
-      if (!patient) {
-        return NextResponse.json({ success: true, data: [] })
-      }
-
-      const data: PatientSummary = {
-        id: patient.id,
-        cid: patient.cid,
-        hn: patient.hn,
-        fullName: patient.fullName,
-        age: patient.age,
-        gender: patient.gender,
-        riskLevel: patient.riskLevel,
-        lat: patient.lat,
-        lng: patient.lng,
-        house: patient.house
-          ? {
-              houseNo: patient.house.houseNo,
-              village: patient.house.village
-                ? { name: patient.house.village.name }
-                : undefined,
-            }
-          : null,
-      }
-
-      return NextResponse.json({ success: true, data: [data] })
-    }
-
-    // Full name search
-    const patients = await prisma.patient.findMany({
-      where: {
-        fullName: { contains: q, mode: 'insensitive' },
-        ...scopeFilter,
-      } as any,
-      take: 20,
-      orderBy: { updatedAt: 'desc' },
-      include: {
-        house: {
-          include: {
-            village: { select: { id: true, name: true, code: true } },
-          },
-        },
-      },
     })
 
-    const data: PatientSummary[] = patients.map((p) => ({
-      id: p.id,
-      cid: p.cid,
-      hn: p.hn,
-      fullName: p.fullName,
-      age: p.age,
-      gender: p.gender,
-      riskLevel: p.riskLevel,
-      lat: p.lat,
-      lng: p.lng,
-      house: p.house
-        ? {
-            houseNo: p.house.houseNo,
-            village: p.house.village
-              ? { name: p.house.village.name }
-              : undefined,
-          }
-        : null,
-    }))
-
-    const response: ApiResponse<PatientSummary[]> = {
-      success: true,
-      data,
-    }
-
+    const response: ApiResponse<PatientSummary[]> = { success: true, data }
     return NextResponse.json(response)
   } catch (error) {
     console.error('GET /api/v1/patients/search error:', error)
     return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Search failed' } },
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Search failed in JHCIS' } },
       { status: 500 }
     )
   }

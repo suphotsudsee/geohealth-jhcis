@@ -1,26 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
-import { getUserFromRequest } from '@/lib/rbac'
+import type { RowDataPacket } from 'mysql2/promise'
+import { genderFromJhcis, jhcisPersonId, jhcisQuery, normalizeJhcisCoordinate, riskFromChronic } from '@/lib/jhcis'
 import { PAGINATION_DEFAULTS, RISK_LEVELS } from '@/lib/constants'
 import type { ApiResponse, PatientSummary, Pagination } from '@/types/api'
 
 export const runtime = 'nodejs'
 
-function buildScopeFilter(user: { role: string; scope?: { village?: string; district?: string; province?: string } } | null) {
-  if (!user) return {}
-  if (user.role === 'ADMIN') return {}
-  if (user.scope?.village) {
-    return { house: { village: { code: user.scope.village } } }
-  }
-  if (user.scope?.district) {
-    return { house: { village: { subDistrict: { districtCode: user.scope.district } } } }
-  }
-  return {}
+type PatientRow = RowDataPacket & {
+  pcucodeperson: string
+  pid: number
+  cid: string | null
+  hn: string | null
+  firstName: string | null
+  lastName: string | null
+  age: number | null
+  genderCode: string | null
+  xgis: string | null
+  ygis: string | null
+  houseNo: string | null
+  villageName: string | null
+  chronicCount: number
+}
+
+type CountRow = RowDataPacket & { total: number }
+
+function addFilter(where: string[], params: unknown[], condition: string, ...values: unknown[]) {
+  where.push(condition)
+  params.push(...values)
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const user = getUserFromRequest(request)
     const { searchParams } = new URL(request.url)
 
     const page = Math.max(1, parseInt(searchParams.get('page') || String(PAGINATION_DEFAULTS.page)))
@@ -33,105 +43,109 @@ export async function GET(request: NextRequest) {
     const gender = searchParams.get('gender')
     const search = searchParams.get('search')?.trim()
     const sort = searchParams.get('sort') || 'updatedAt'
-    const order = (searchParams.get('order') || 'desc') as 'asc' | 'desc'
+    const order = searchParams.get('order') === 'asc' ? 'ASC' : 'DESC'
 
-    const allowedSortFields = ['fullName', 'age', 'updatedAt', 'createdAt', 'riskLevel']
-    const sortField = allowedSortFields.includes(sort) ? sort : 'updatedAt'
+    const where: string[] = []
+    const params: unknown[] = []
 
-    const where: Record<string, unknown> = {
-      ...buildScopeFilter(user),
-    }
-
+    if (chronicCode) addFilter(where, params, 'pc.chroniccode = ?', chronicCode)
+    if (villageId) addFilter(where, params, 'v.villcode = ?', villageId)
+    if (ageMin) addFilter(where, params, 'TIMESTAMPDIFF(YEAR, p.birth, CURDATE()) >= ?', Number(ageMin))
+    if (ageMax) addFilter(where, params, 'TIMESTAMPDIFF(YEAR, p.birth, CURDATE()) <= ?', Number(ageMax))
+    if (gender === 'MALE') addFilter(where, params, "p.sex = '1'")
+    if (gender === 'FEMALE') addFilter(where, params, "p.sex = '2'")
+    if (gender === 'UNKNOWN') addFilter(where, params, "(p.sex IS NULL OR p.sex NOT IN ('1', '2'))")
     if (riskLevel && RISK_LEVELS.includes(riskLevel as typeof RISK_LEVELS[number])) {
-      where.riskLevel = riskLevel
+      if (riskLevel === 'NORMAL') addFilter(where, params, 'pc.pid IS NULL')
+      else addFilter(where, params, 'pc.pid IS NOT NULL')
     }
-
-    if (chronicCode) {
-      where.chronicRecords = { some: { diseaseCode: chronicCode } }
-    }
-
-    if (villageId) {
-      where.house = { ...(where.house as Record<string, unknown> || {}), villageId }
-    }
-
-    if (ageMin || ageMax) {
-      const ageFilter: Record<string, number> = {}
-      if (ageMin) ageFilter.gte = parseInt(ageMin)
-      if (ageMax) ageFilter.lte = parseInt(ageMax)
-      where.age = ageFilter
-    }
-
-    if (gender && ['MALE', 'FEMALE', 'UNKNOWN'].includes(gender)) {
-      where.gender = gender
-    }
-
     if (search) {
-      where.OR = [
-        { cid: { contains: search } },
-        { hn: { contains: search } },
-        { fullName: { contains: search } },
-        { firstName: { contains: search } },
-        { lastName: { contains: search } },
-      ]
+      const like = `%${search}%`
+      addFilter(
+        where,
+        params,
+        '(p.idcard LIKE ? OR CAST(p.pid AS CHAR) LIKE ? OR p.fname LIKE ? OR p.lname LIKE ? OR CONCAT(p.fname, " ", p.lname) LIKE ?)',
+        like,
+        like,
+        like,
+        like,
+        like
+      )
     }
 
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const sortMap: Record<string, string> = {
+      fullName: 'p.fname',
+      age: 'age',
+      updatedAt: 'p.dateupdate',
+      createdAt: 'p.dateregis',
+      riskLevel: 'chronicCount',
+    }
+    const orderBy = sortMap[sort] || sortMap.updatedAt
     const skip = (page - 1) * limit
 
-    const [total, patients] = await Promise.all([
-      prisma.patient.count({ where: where as any }),
-      prisma.patient.findMany({
-        where: where as any,
-        skip,
-        take: limit,
-        orderBy: { [sortField]: order },
-        include: {
-          house: {
-            include: {
-              village: { select: { id: true, name: true, code: true } },
-            },
-          },
-        },
-      }),
+    const baseFrom = `FROM person p
+      LEFT JOIN house h ON h.pcucode = p.pcucodeperson AND h.hcode = p.hcode
+      LEFT JOIN village v ON v.pcucode = h.pcucode AND v.villcode = h.villcode
+      LEFT JOIN personchronic pc ON pc.pcucodeperson = p.pcucodeperson AND pc.pid = p.pid`
+
+    const [countRows, patientRows] = await Promise.all([
+      jhcisQuery<CountRow>(
+        `SELECT COUNT(*) AS total FROM (SELECT p.pcucodeperson, p.pid ${baseFrom} ${whereSql} GROUP BY p.pcucodeperson, p.pid) x`,
+        params
+      ),
+      jhcisQuery<PatientRow>(
+        `SELECT
+          p.pcucodeperson,
+          p.pid,
+          p.idcard AS cid,
+          CAST(p.pid AS CHAR) AS hn,
+          p.fname AS firstName,
+          p.lname AS lastName,
+          TIMESTAMPDIFF(YEAR, p.birth, CURDATE()) AS age,
+          p.sex AS genderCode,
+          h.xgis,
+          h.ygis,
+          h.hno AS houseNo,
+          v.villname AS villageName,
+          COUNT(pc.chroniccode) AS chronicCount
+        ${baseFrom}
+        ${whereSql}
+        GROUP BY p.pcucodeperson, p.pid, p.idcard, p.fname, p.lname, p.birth, p.sex, h.xgis, h.ygis, h.hno, v.villname
+        ORDER BY ${orderBy} ${order}
+        LIMIT ? OFFSET ?`,
+        [...params, limit, skip]
+      ),
     ])
 
-    const data: PatientSummary[] = patients.map((p) => ({
-      id: p.id,
-      cid: p.cid,
-      hn: p.hn,
-      fullName: p.fullName,
-      age: p.age,
-      gender: p.gender,
-      riskLevel: p.riskLevel,
-      lat: p.lat,
-      lng: p.lng,
-      house: p.house
-        ? {
-            houseNo: p.house.houseNo,
-            village: p.house.village
-              ? { id: p.house.village.id, name: p.house.village.name }
-              : undefined,
-          }
-        : null,
-    }))
+    const data: PatientSummary[] = patientRows.map((p) => {
+      const coord = normalizeJhcisCoordinate(p.xgis, p.ygis)
+      return {
+        id: jhcisPersonId(p.pcucodeperson, p.pid),
+        cid: p.cid,
+        hn: p.hn,
+        fullName: [p.firstName, p.lastName].filter(Boolean).join(' ') || '-',
+        age: p.age,
+        gender: genderFromJhcis(p.genderCode) as PatientSummary['gender'],
+        riskLevel: riskFromChronic(p.chronicCount) as PatientSummary['riskLevel'],
+        lat: coord.lat,
+        lng: coord.lng,
+        house: {
+          houseNo: p.houseNo,
+          village: { name: p.villageName },
+        },
+      }
+    })
 
-    const pagination: Pagination = {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    }
-
-    const response: ApiResponse<PatientSummary[]> = {
-      success: true,
-      data,
-      pagination,
-    }
+    const total = Number(countRows[0]?.total || 0)
+    const pagination: Pagination = { total, page, limit, totalPages: Math.ceil(total / limit) }
+    const response: ApiResponse<PatientSummary[]> = { success: true, data, pagination }
 
     return NextResponse.json(response)
   } catch (error) {
     console.error('GET /api/v1/patients error:', error)
     return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch patients' } },
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch patients from JHCIS' } },
       { status: 500 }
     )
   }

@@ -1,128 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server'
-import type { Prisma } from '@prisma/client'
-import prisma from '@/lib/prisma'
-import { getUserFromRequest } from '@/lib/rbac'
+import { jhcisQuery } from '@/lib/jhcis'
 import type { ApiResponse, DashboardStats } from '@/types/api'
 
 export const runtime = 'nodejs'
 
-function getScopedPatientWhere(user: ReturnType<typeof getUserFromRequest>): Prisma.PatientWhereInput {
-  if (!user || user.role === 'ADMIN') return {}
-
-  if (user.scope?.village) {
-    return {
-      house: {
-        is: {
-          village: {
-            is: { code: user.scope.village },
-          },
-        },
-      },
-    }
-  }
-
-  if (user.scope?.district) {
-    return {
-      house: {
-        is: {
-          village: {
-            is: {
-              subDistrict: {
-                is: { districtCode: user.scope.district },
-              },
-            },
-          },
-        },
-      },
-    }
-  }
-
-  return {}
+type CountRow = {
+  totalPopulation: number
+  totalChronic: number
+  totalBedridden: number
+  totalRisk: number
+  ffcToday: number
+  ffcThisMonth: number
+  coveredVillages: number
+  totalVillages: number
 }
 
-function getScopedFFCVisitWhere(user: ReturnType<typeof getUserFromRequest>): Prisma.FFCVisitWhereInput {
-  const patientWhere = getScopedPatientWhere(user)
-  return Object.keys(patientWhere).length > 0 ? { patient: { is: patientWhere } } : {}
-}
-
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
-    const user = getUserFromRequest(request)
+    const rows = await jhcisQuery<CountRow & import('mysql2/promise').RowDataPacket>(
+      `SELECT
+        (SELECT COUNT(*) FROM person) AS totalPopulation,
+        (SELECT COUNT(*) FROM personchronic pc) AS totalChronic,
+        (SELECT COUNT(DISTINCT CONCAT(pu.pcucodeperson, ':', pu.pid)) FROM personunable pu) AS totalBedridden,
+        (SELECT COUNT(*) FROM personchronic pc) AS totalRisk,
+        (SELECT COUNT(*) FROM visit v WHERE v.visitdate = CURDATE()) AS ffcToday,
+        (SELECT COUNT(*) FROM visit v WHERE v.visitdate >= DATE_FORMAT(CURDATE(), '%Y-%m-01')) AS ffcThisMonth,
+        (SELECT COUNT(DISTINCT h.villcode) FROM house h WHERE COALESCE(h.xgis, '') <> '' AND COALESCE(h.ygis, '') <> '') AS coveredVillages,
+        (SELECT COUNT(*) FROM village) AS totalVillages`
+    )
 
-    const scopePatientWhere = getScopedPatientWhere(user)
-    const scopeFFCVisitWhere = getScopedFFCVisitWhere(user)
-
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-
-    const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
-
-    const [
-      totalPopulation,
-      totalChronic,
-      totalBedridden,
-      totalRisk,
-      ffcToday,
-      ffcThisMonth,
-      coveredVillages,
-      totalVillages,
-    ] = await Promise.all([
-      prisma.patient.count({ where: scopePatientWhere }),
-      prisma.chronicRecord.count({
-        where: {
-          isActive: true,
-          patient: Object.keys(scopePatientWhere).length > 0 ? { is: scopePatientWhere } : undefined,
-        },
-      }),
-      prisma.patient.count({
-        where: {
-          bedridden: true,
-          ...scopePatientWhere,
-        },
-      }),
-      prisma.patient.count({
-        where: {
-          riskLevel: { in: ['CRITICAL', 'HIGH'] },
-          ...scopePatientWhere,
-        },
-      }),
-      prisma.fFCVisit.count({
-        where: {
-          visitDate: { gte: today },
-          ...scopeFFCVisitWhere,
-        },
-      }),
-      prisma.fFCVisit.count({
-        where: {
-          visitDate: { gte: firstOfMonth },
-          ...scopeFFCVisitWhere,
-        },
-      }),
-      prisma.village.count({ where: { houses: { some: {} } } }),
-      prisma.village.count(),
-    ])
-
+    const data = rows[0]
     const stats: DashboardStats = {
-      totalPopulation,
-      totalChronic,
-      totalBedridden,
-      totalRisk,
-      ffcToday,
-      ffcThisMonth,
-      coveredVillages,
-      totalVillages,
+      totalPopulation: Number(data.totalPopulation || 0),
+      totalChronic: Number(data.totalChronic || 0),
+      totalBedridden: Number(data.totalBedridden || 0),
+      totalRisk: Number(data.totalRisk || 0),
+      ffcToday: Number(data.ffcToday || 0),
+      ffcThisMonth: Number(data.ffcThisMonth || 0),
+      coveredVillages: Number(data.coveredVillages || 0),
+      totalVillages: Number(data.totalVillages || 0),
     }
 
-    const response: ApiResponse<DashboardStats> = {
-      success: true,
-      data: stats,
-    }
-
+    const response: ApiResponse<DashboardStats> = { success: true, data: stats }
     return NextResponse.json(response)
   } catch (error) {
     console.error('GET /api/v1/analytics/dashboard error:', error)
     return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch dashboard stats' } },
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch dashboard stats from JHCIS' } },
       { status: 500 }
     )
   }
