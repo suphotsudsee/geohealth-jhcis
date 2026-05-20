@@ -1,8 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
-import { ArrowUpDown, Search, UserPlus } from 'lucide-react'
+import { Home, MapPin, Search, Users } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -19,25 +18,27 @@ import EmptyState from '@/components/shared/EmptyState'
 import LoadingSpinner from '@/components/shared/LoadingSpinner'
 import { useDebounce } from '@/hooks/useDebounce'
 
-interface Patient {
+interface House {
   id: string
-  cid?: string | null
-  hn?: string | null
-  fullName: string
-  age?: number | null
-  gender?: string | null
-  riskLevel?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'NORMAL' | null
-  house?: {
-    houseNo?: string | null
-    village?: {
-      name?: string | null
-    } | null
+  houseNo?: string | null
+  moo?: number | null
+  address?: string | null
+  riskLevel: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'NORMAL'
+  lat?: number | null
+  lng?: number | null
+  village?: {
+    name?: string | null
+    code?: string | null
+    moo?: number | null
   } | null
+  _count?: {
+    patients: number
+  }
 }
 
-interface PatientsResponse {
+interface HousesResponse {
   success: boolean
-  data?: Patient[]
+  data?: House[]
   pagination?: {
     total: number
     page: number
@@ -49,30 +50,28 @@ interface PatientsResponse {
   }
 }
 
-const riskLabels: Record<string, string> = {
+const riskLabels: Record<House['riskLevel'], string> = {
   CRITICAL: 'วิกฤติ',
   HIGH: 'สูง',
   MEDIUM: 'ปานกลาง',
   NORMAL: 'ปกติ',
 }
 
-const riskVariants: Record<string, 'default' | 'destructive' | 'secondary' | 'outline'> = {
+const riskVariants: Record<House['riskLevel'], 'default' | 'destructive' | 'secondary' | 'outline'> = {
   CRITICAL: 'destructive',
   HIGH: 'default',
   MEDIUM: 'secondary',
   NORMAL: 'outline',
 }
 
-const genderLabels: Record<string, string> = {
-  MALE: 'ชาย',
-  FEMALE: 'หญิง',
-  UNKNOWN: 'ไม่ระบุ',
+function formatCoordinate(value: number) {
+  return value.toFixed(6)
 }
 
-export default function PatientsPage() {
+export default function HouseholdsPage() {
   const [searchValue, setSearchValue] = useState('')
   const [page, setPage] = useState(1)
-  const [patients, setPatients] = useState<Patient[]>([])
+  const [houses, setHouses] = useState<House[]>([])
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
@@ -86,7 +85,7 @@ export default function PatientsPage() {
   useEffect(() => {
     const controller = new AbortController()
 
-    async function loadPatients() {
+    async function loadHouses() {
       setIsLoading(true)
       setError(null)
 
@@ -97,60 +96,41 @@ export default function PatientsPage() {
       if (debouncedSearch) params.set('search', debouncedSearch)
 
       try {
-        const response = await fetch(`/api/v1/patients?${params.toString()}`, {
+        const response = await fetch(`/api/v1/houses?${params.toString()}`, {
           signal: controller.signal,
         })
-        const payload = (await response.json()) as PatientsResponse
+        const payload = (await response.json()) as HousesResponse
 
         if (!response.ok || !payload.success) {
-          throw new Error(payload.error?.message || 'Failed to fetch patients')
+          throw new Error(payload.error?.message || 'Failed to fetch houses')
         }
 
-        setPatients(payload.data || [])
+        setHouses(payload.data || [])
         setTotal(payload.pagination?.total || 0)
         setTotalPages(payload.pagination?.totalPages || 1)
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return
-        setError(err instanceof Error ? err.message : 'Failed to fetch patients')
-        setPatients([])
+        setError(err instanceof Error ? err.message : 'Failed to fetch houses')
+        setHouses([])
       } finally {
         setIsLoading(false)
       }
     }
 
-    loadPatients()
+    loadHouses()
 
     return () => controller.abort()
   }, [debouncedSearch, page])
-
-  const getRiskBadge = (risk?: string | null) => {
-    if (!risk) return <span className="text-muted-foreground">-</span>
-
-    return (
-      <Badge variant={riskVariants[risk] || 'outline'}>
-        {riskLabels[risk] || risk}
-      </Badge>
-    )
-  }
-
-  const getGenderLabel = (gender?: string | null) => {
-    if (!gender) return '-'
-    return genderLabels[gender] || gender
-  }
 
   return (
     <div className="container mx-auto p-4 md:p-6">
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">ผู้ป่วย</h1>
+          <h1 className="text-2xl font-bold">ครัวเรือน</h1>
           <p className="text-sm text-muted-foreground">
-            ค้นหาและจัดการข้อมูลผู้ป่วยในพื้นที่
+            ค้นหาและตรวจสอบข้อมูลบ้าน ประชากร ระดับความเสี่ยง และพิกัดในพื้นที่
           </p>
         </div>
-        <Button disabled>
-          <UserPlus className="mr-2 h-4 w-4" />
-          เพิ่มผู้ป่วย
-        </Button>
       </div>
 
       <Card>
@@ -158,7 +138,7 @@ export default function PatientsPage() {
           <div className="relative max-w-sm">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="ค้นหา CID, HN, ชื่อ..."
+              placeholder="ค้นหาบ้านเลขที่, ที่อยู่, หมู่บ้าน..."
               className="pl-9"
               value={searchValue}
               onChange={(event) => setSearchValue(event.target.value)}
@@ -172,9 +152,9 @@ export default function PatientsPage() {
             </div>
           ) : error ? (
             <EmptyState message="โหลดข้อมูลไม่สำเร็จ" description={error} />
-          ) : patients.length === 0 ? (
+          ) : houses.length === 0 ? (
             <EmptyState
-              message="ไม่พบข้อมูลผู้ป่วย"
+              message="ไม่พบข้อมูลครัวเรือน"
               description="ลองค้นหาด้วยเงื่อนไขอื่น หรือซิงค์ข้อมูลจาก JHCIS"
             />
           ) : (
@@ -182,43 +162,63 @@ export default function PatientsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[140px]">CID</TableHead>
-                    <TableHead>HN</TableHead>
-                    <TableHead>
-                      <div className="flex items-center gap-1">
-                        ชื่อ-นามสกุล
-                        <ArrowUpDown className="h-3 w-3" />
-                      </div>
-                    </TableHead>
-                    <TableHead>อายุ</TableHead>
-                    <TableHead>เพศ</TableHead>
-                    <TableHead>ความเสี่ยง</TableHead>
-                    <TableHead>บ้าน</TableHead>
+                    <TableHead>บ้านเลขที่</TableHead>
                     <TableHead>หมู่บ้าน</TableHead>
+                    <TableHead>ที่อยู่</TableHead>
+                    <TableHead>ประชากร</TableHead>
+                    <TableHead>ความเสี่ยง</TableHead>
+                    <TableHead>พิกัด</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {patients.map((patient) => (
-                    <TableRow key={patient.id}>
-                      <TableCell className="font-mono text-xs">
-                        {patient.cid || '-'}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {patient.hn || '-'}
-                      </TableCell>
+                  {houses.map((house) => (
+                    <TableRow key={house.id}>
                       <TableCell className="font-medium">
-                        <Link className="hover:underline" href={`/patients/${patient.id}`}>
-                          {patient.fullName}
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Home className="h-4 w-4 text-muted-foreground" />
+                          {house.houseNo || '-'}
+                        </div>
                       </TableCell>
-                      <TableCell>{patient.age ?? '-'}</TableCell>
-                      <TableCell>{getGenderLabel(patient.gender)}</TableCell>
-                      <TableCell>{getRiskBadge(patient.riskLevel)}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {patient.house?.houseNo || '-'}
+                      <TableCell>
+                        <div>{house.village?.name || '-'}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {house.village?.moo ? `หมู่ ${house.village.moo}` : house.village?.code || ''}
+                        </div>
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {patient.house?.village?.name || '-'}
+                      <TableCell className="max-w-[260px] truncate">
+                        {house.address || '-'}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Users className="h-4 w-4 text-muted-foreground" />
+                          {house._count?.patients ?? 0}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={riskVariants[house.riskLevel] || 'outline'}>
+                          {riskLabels[house.riskLevel] || house.riskLevel}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {house.lat != null && house.lng != null ? (
+                          <div className="space-y-1">
+                            <div className="font-mono text-xs leading-5">
+                              <div>Lat: {formatCoordinate(house.lat)}</div>
+                              <div>Lng: {formatCoordinate(house.lng)}</div>
+                            </div>
+                            <a
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              href={`https://www.google.com/maps?q=${house.lat},${house.lng}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <MapPin className="h-3.5 w-3.5" />
+                              เปิดแผนที่
+                            </a>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -227,7 +227,7 @@ export default function PatientsPage() {
 
               <div className="flex items-center justify-between pt-4">
                 <p className="text-sm text-muted-foreground">
-                  แสดง {patients.length} จาก {total} รายการ
+                  แสดง {houses.length} จาก {total} รายการ
                 </p>
                 <div className="flex gap-2">
                   <Button

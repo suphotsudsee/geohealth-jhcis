@@ -4,6 +4,8 @@ import { useEffect, useRef, useCallback } from 'react'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet.markercluster'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 import 'leaflet/dist/leaflet.css'
 
 import type { MarkerData } from '@/types/api'
@@ -82,6 +84,7 @@ export interface MapClusterProps {
   markers: MarkerData[]
   maxClusterRadius?: number
   disableClusteringAtZoom?: number
+  fitBoundsOnLoad?: boolean
 }
 
 /**
@@ -92,9 +95,11 @@ export default function MapCluster({
   markers,
   maxClusterRadius = 50,
   disableClusteringAtZoom = 16,
+  fitBoundsOnLoad = false,
 }: MapClusterProps) {
   const map = useMap()
   const clusterGroupRef = useRef<L.MarkerClusterGroup | null>(null)
+  const hasFitBoundsRef = useRef(false)
   const selectMarker = useMapStore((s) => s.selectMarker)
   const selectedMarkerId = useMapStore((s) => s.selectedMarkerId)
 
@@ -149,10 +154,15 @@ export default function MapCluster({
       group.addLayer(m)
     })
 
+    if (fitBoundsOnLoad && markers.length > 0 && !hasFitBoundsRef.current) {
+      map.fitBounds(group.getBounds(), { padding: [32, 32], maxZoom: 15 })
+      hasFitBoundsRef.current = true
+    }
+
     return () => {
       group.clearLayers()
     }
-  }, [markers, handleClick, selectedMarkerId])
+  }, [markers, handleClick, selectedMarkerId, fitBoundsOnLoad, map])
 
   return null
 }

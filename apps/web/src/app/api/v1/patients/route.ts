@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
     const ageMin = searchParams.get('ageMin')
     const ageMax = searchParams.get('ageMax')
     const gender = searchParams.get('gender')
+    const search = searchParams.get('search')?.trim()
     const sort = searchParams.get('sort') || 'updatedAt'
     const order = (searchParams.get('order') || 'desc') as 'asc' | 'desc'
 
@@ -62,6 +63,16 @@ export async function GET(request: NextRequest) {
 
     if (gender && ['MALE', 'FEMALE', 'UNKNOWN'].includes(gender)) {
       where.gender = gender
+    }
+
+    if (search) {
+      where.OR = [
+        { cid: { contains: search } },
+        { hn: { contains: search } },
+        { fullName: { contains: search } },
+        { firstName: { contains: search } },
+        { lastName: { contains: search } },
+      ]
     }
 
     const skip = (page - 1) * limit

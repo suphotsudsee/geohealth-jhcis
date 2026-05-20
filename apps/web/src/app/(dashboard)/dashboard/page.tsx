@@ -6,32 +6,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useQuery } from '@tanstack/react-query'
 import { MapPin, Users, Activity } from 'lucide-react'
 
-// Mock API function - replace with actual API call
 async function fetchDashboardStats() {
-  // TODO: Replace with actual API call
-  return {
-    totalPopulation: 45230,
-    totalChronic: 12340,
-    totalBedridden: 890,
-    totalRisk: 3450,
-    ffcToday: 127,
-    ffcThisMonth: 2840,
+  const res = await fetch('/api/v1/analytics/dashboard')
+  const json = await res.json()
+  if (!res.ok || !json.success) {
+    throw new Error(json.error?.message || 'Failed to fetch dashboard stats')
   }
+  return json.data
 }
 
 async function fetchDiseaseData() {
-  // TODO: Replace with actual API call
-  return [
-    { name: 'DM', count: 4520 },
-    { name: 'HT', count: 3890 },
-    { name: 'TB', count: 230 },
-    { name: 'DENGUE', count: 45 },
-    { name: 'COVID', count: 120 },
-    { name: 'STROKE', count: 340 },
-    { name: 'CANCER', count: 280 },
-    { name: 'COPD', count: 190 },
-    { name: 'CKD', count: 650 },
-  ]
+  const res = await fetch('/api/v1/analytics/diseases')
+  const json = await res.json()
+  if (!res.ok || !json.success) {
+    throw new Error(json.error?.message || 'Failed to fetch disease data')
+  }
+  return json.data
 }
 
 export default function DashboardPage() {
@@ -87,7 +77,9 @@ export default function DashboardPage() {
                 <MapPin className="h-4 w-4 text-muted-foreground" />
                 <span>หมู่บ้านที่ครอบคลุม</span>
               </div>
-              <span className="font-bold">24/32</span>
+              <span className="font-bold">
+                {stats ? `${stats.coveredVillages}/${stats.totalVillages}` : '-'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm">

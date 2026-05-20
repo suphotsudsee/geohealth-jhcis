@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import StatsCards from '@/components/dashboard/StatsCards'
 import { useMapStore } from '@/stores/map.store'
+import type { MarkerData } from '@/types/api'
 import { Map, Search, Layers, Circle, Square } from 'lucide-react'
 
 // Lazy load the map component since Leaflet is browser-only
@@ -28,9 +29,15 @@ const MapView = dynamic(
   }
 )
 
+const MapCluster = dynamic(
+  () => import('@/components/map/MapCluster').catch(() => () => null),
+  { ssr: false }
+)
+
 export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [stats, setStats] = useState<{totalPopulation: number; totalChronic: number; totalBedridden: number; totalRisk: number; ffcToday: number} | undefined>(undefined)
+  const [markers, setMarkers] = useState<MarkerData[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const activeLayers = useMapStore((s) => s.activeLayers)
   const toggleLayer = useMapStore((s) => s.toggleLayer)
@@ -45,6 +52,15 @@ export default function HomePage() {
       .finally(() => setIsLoading(false))
   }, [])
 
+  useEffect(() => {
+    fetch('/api/v1/map/markers')
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.success && Array.isArray(json.data)) setMarkers(json.data)
+      })
+      .catch(console.error)
+  }, [])
+
   return (
     <div className="relative flex h-full flex-col">
       {/* Stats bar - hidden on mobile */}
@@ -56,7 +72,11 @@ export default function HomePage() {
 
       {/* Map area */}
       <div className="relative flex-1">
-        <MapView />
+        <MapView>
+          {activeLayers.includes('markers') && (
+            <MapCluster markers={markers} fitBoundsOnLoad />
+          )}
+        </MapView>
 
         {/* Search overlay */}
         <div className="absolute left-4 right-4 top-4 z-[1000] md:left-6 md:right-auto md:w-80">

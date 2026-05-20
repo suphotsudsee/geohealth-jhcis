@@ -1,38 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import prisma from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/rbac'
 import type { ApiResponse, DashboardStats } from '@/types/api'
 
 export const runtime = 'nodejs'
 
+function getScopedPatientWhere(user: ReturnType<typeof getUserFromRequest>): Prisma.PatientWhereInput {
+  if (!user || user.role === 'ADMIN') return {}
+
+  if (user.scope?.village) {
+    return {
+      house: {
+        is: {
+          village: {
+            is: { code: user.scope.village },
+          },
+        },
+      },
+    }
+  }
+
+  if (user.scope?.district) {
+    return {
+      house: {
+        is: {
+          village: {
+            is: {
+              subDistrict: {
+                is: { districtCode: user.scope.district },
+              },
+            },
+          },
+        },
+      },
+    }
+  }
+
+  return {}
+}
+
+function getScopedFFCVisitWhere(user: ReturnType<typeof getUserFromRequest>): Prisma.FFCVisitWhereInput {
+  const patientWhere = getScopedPatientWhere(user)
+  return Object.keys(patientWhere).length > 0 ? { patient: { is: patientWhere } } : {}
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = getUserFromRequest(request)
 
-    // Build scope for patient/house filtering
-    const scopeFilter: Record<string, unknown> = {}
-    if (user && user.role !== 'ADMIN') {
-      if (user.scope?.village) {
-        scopeFilter.house = { village: { code: user.scope.village } }
-      } else if (user.scope?.district) {
-        scopeFilter.house = { village: { subDistrict: { districtCode: user.scope.district } } }
-      }
-    }
+    const scopePatientWhere = getScopedPatientWhere(user)
+    const scopeFFCVisitWhere = getScopedFFCVisitWhere(user)
 
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
     const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
-
-    const scopePatientWhere = { ...scopeFilter } as any
-    const scopeFFCToday = {
-      visitDate: { gte: today },
-      ...(user?.scope?.village
-        ? { house: { village: { code: user.scope.village } } }
-        : user?.scope?.district
-          ? { house: { village: { subDistrict: { districtCode: user.scope.district } } } }
-          : {}),
-    }
 
     const [
       totalPopulation,
@@ -41,42 +64,42 @@ export async function GET(request: NextRequest) {
       totalRisk,
       ffcToday,
       ffcThisMonth,
+      coveredVillages,
+      totalVillages,
     ] = await Promise.all([
       prisma.patient.count({ where: scopePatientWhere }),
       prisma.chronicRecord.count({
         where: {
           isActive: true,
-          patient: Object.keys(scopeFilter).length > 0 ? scopeFilter : undefined,
-        } as any,
+          patient: Object.keys(scopePatientWhere).length > 0 ? { is: scopePatientWhere } : undefined,
+        },
       }),
       prisma.patient.count({
         where: {
           bedridden: true,
-          ...scopeFilter,
-        } as any,
+          ...scopePatientWhere,
+        },
       }),
       prisma.patient.count({
         where: {
           riskLevel: { in: ['CRITICAL', 'HIGH'] },
-          ...scopeFilter,
-        } as any,
+          ...scopePatientWhere,
+        },
       }),
-      (prisma as any).fFCVisit.count({
+      prisma.fFCVisit.count({
         where: {
           visitDate: { gte: today },
-          ...(Object.keys(scopeFFCToday).length > 0
-            ? { house: (scopeFFCToday as any).house || undefined }
-            : {}),
-        } as any,
+          ...scopeFFCVisitWhere,
+        },
       }),
-      (prisma as any).fFCVisit.count({
+      prisma.fFCVisit.count({
         where: {
           visitDate: { gte: firstOfMonth },
-          ...(Object.keys(scopeFFCToday).length > 0
-            ? { house: (scopeFFCToday as any).house || undefined }
-            : {}),
-        } as any,
+          ...scopeFFCVisitWhere,
+        },
       }),
+      prisma.village.count({ where: { houses: { some: {} } } }),
+      prisma.village.count(),
     ])
 
     const stats: DashboardStats = {
@@ -86,6 +109,8 @@ export async function GET(request: NextRequest) {
       totalRisk,
       ffcToday,
       ffcThisMonth,
+      coveredVillages,
+      totalVillages,
     }
 
     const response: ApiResponse<DashboardStats> = {

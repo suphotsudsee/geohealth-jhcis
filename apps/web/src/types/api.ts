@@ -109,4 +109,6 @@ export interface DashboardStats {
   totalRisk: number
   ffcToday: number
   ffcThisMonth: number
+  coveredVillages: number
+  totalVillages: number
 }

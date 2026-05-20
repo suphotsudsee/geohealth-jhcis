@@ -7,7 +7,19 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Select = SelectPrimitive.Root
+const EMPTY_SELECT_ITEM_VALUE = "__empty_select_item__"
+
+const Select = ({
+  onValueChange,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Root>) => (
+  <SelectPrimitive.Root
+    onValueChange={(value) => {
+      onValueChange?.(value === EMPTY_SELECT_ITEM_VALUE ? "" : value)
+    }}
+    {...props}
+  />
+)
 
 const SelectGroup = SelectPrimitive.Group
 
@@ -115,9 +127,10 @@ SelectLabel.displayName = SelectPrimitive.Label.displayName
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, value, ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
+    value={value === "" ? EMPTY_SELECT_ITEM_VALUE : value}
     className={cn(
       "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className

@@ -1,12 +1,13 @@
+import path from 'node:path'
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ['192.168.1.196'],
   experimental: {
     serverActions: { bodySizeLimit: '10mb' },
-    // @ts-expect-error - turbopack.root is valid in Next.js 16 runtime (monorepo fix)
-    turbopack: {
-      root: '..',
-    },
+  },
+  turbopack: {
+    root: path.resolve(__dirname, '../..'),
   },
   images: {
     remotePatterns: [

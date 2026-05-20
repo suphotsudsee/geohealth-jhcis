@@ -4,12 +4,34 @@ import type { MarkerData } from '@/types/api'
 
 export const runtime = 'nodejs'
 
+const THAILAND_BOUNDS = {
+  minLat: 5,
+  maxLat: 21,
+  minLng: 97,
+  maxLng: 106,
+}
+
+function isValidThaiCoordinate(lat: number, lng: number) {
+  return (
+    lat >= THAILAND_BOUNDS.minLat &&
+    lat <= THAILAND_BOUNDS.maxLat &&
+    lng >= THAILAND_BOUNDS.minLng &&
+    lng <= THAILAND_BOUNDS.maxLng
+  )
+}
+
+function normalizeCoordinate(lat: number | null, lng: number | null) {
+  if (lat === null || lng === null) return null
+  if (isValidThaiCoordinate(lat, lng)) return { lat, lng }
+  if (isValidThaiCoordinate(lng, lat)) return { lat: lng, lng: lat }
+  return null
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const villageId = searchParams.get('villageId')
 
-    // Bounding box: sw_lat, sw_lng, ne_lat, ne_lng
     const swLat = searchParams.get('sw_lat')
     const swLng = searchParams.get('sw_lng')
     const neLat = searchParams.get('ne_lat')
@@ -24,7 +46,6 @@ export async function GET(request: NextRequest) {
       patientWhere.house = { villageId }
     }
 
-    // Bounding box filter
     if (swLat && swLng && neLat && neLng) {
       const parsedSwLat = parseFloat(swLat)
       const parsedSwLng = parseFloat(swLng)
@@ -60,7 +81,6 @@ export async function GET(request: NextRequest) {
       take: 10000,
     })
 
-    // Also include houses without patients at their location
     const houseWhere: Record<string, unknown> = {
       lat: { not: null },
       lng: { not: null },
@@ -92,45 +112,51 @@ export async function GET(request: NextRequest) {
       take: 10000,
     })
 
-    // Patient markers
-    const patientMarkers: MarkerData[] = patients.map((p) => ({
-      id: p.id,
-      lat: p.lat!,
-      lng: p.lng!,
-      type: 'patient' as const,
-      riskLevel: p.riskLevel,
-      label: p.fullName,
-      popupData: {
-        cid: p.cid,
-        age: p.age,
-        gender: p.gender,
-        chronicDisease: p.chronicDisease,
-        bedridden: p.bedridden,
-        houseNo: p.house?.houseNo,
-        villageName: p.house?.village?.name,
-      },
-    }))
+    const patientMarkers: MarkerData[] = patients.flatMap((patient) => {
+      const coord = normalizeCoordinate(patient.lat, patient.lng)
+      if (!coord) return []
 
-    // House markers (houses without lat/lng already covered by patients)
-    const existingPatientHouseIds = new Set(patients.filter(p => p.house).map(p => p.house?.houseNo))
-    const houseMarkers: MarkerData[] = houses
-      .filter((h) => !existingPatientHouseIds.has(h.houseNo))
-      .map((h) => ({
-        id: h.id,
-        lat: h.lat!,
-        lng: h.lng!,
-        type: 'house' as const,
-        riskLevel: h.riskLevel,
-        label: `บ้านเลขที่ ${h.houseNo || ''}`,
+      return [{
+        id: patient.id,
+        lat: coord.lat,
+        lng: coord.lng,
+        type: 'patient' as const,
+        riskLevel: patient.riskLevel,
+        label: patient.fullName,
         popupData: {
-          houseNo: h.houseNo,
-          villageName: h.village?.name,
+          cid: patient.cid,
+          age: patient.age,
+          gender: patient.gender,
+          chronicDisease: patient.chronicDisease,
+          bedridden: patient.bedridden,
+          houseNo: patient.house?.houseNo,
+          villageName: patient.house?.village?.name,
         },
-      }))
+      }]
+    })
 
-    const markers = [...patientMarkers, ...houseMarkers]
+    const existingPatientHouseNos = new Set(patients.filter((patient) => patient.house).map((patient) => patient.house?.houseNo))
+    const houseMarkers: MarkerData[] = houses
+      .filter((house) => !existingPatientHouseNos.has(house.houseNo))
+      .flatMap((house) => {
+        const coord = normalizeCoordinate(house.lat, house.lng)
+        if (!coord) return []
 
-    return NextResponse.json({ success: true, data: markers })
+        return [{
+          id: house.id,
+          lat: coord.lat,
+          lng: coord.lng,
+          type: 'house' as const,
+          riskLevel: house.riskLevel,
+          label: `บ้านเลขที่ ${house.houseNo || ''}`,
+          popupData: {
+            houseNo: house.houseNo,
+            villageName: house.village?.name,
+          },
+        }]
+      })
+
+    return NextResponse.json({ success: true, data: [...patientMarkers, ...houseMarkers] })
   } catch (error) {
     console.error('GET /api/v1/map/markers error:', error)
     return NextResponse.json(
