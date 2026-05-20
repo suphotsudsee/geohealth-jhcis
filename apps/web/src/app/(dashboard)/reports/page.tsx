@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +25,18 @@ interface ExportHistory {
   status: 'success' | 'failed'
   createdAt: string
   fileName: string
+}
+
+interface VillageOption {
+  id: string
+  name: string | null
+  moo: number | null
+}
+
+interface DiseaseOption {
+  name: string
+  label: string
+  count: number
 }
 
 const REPORT_TYPES: ReportType[] = [
@@ -73,14 +85,6 @@ const FORMAT_ICONS: Record<string, React.ReactNode> = {
   geojson: <Map className="h-4 w-4" />,
 }
 
-const MOCK_EXPORT_HISTORY: ExportHistory[] = [
-  { id: '1', type: 'patient-list', format: 'pdf', status: 'success', createdAt: '2026-05-18T10:30:00Z', fileName: 'patient-list-2026-05-18.pdf' },
-  { id: '2', type: 'chronic-summary', format: 'csv', status: 'success', createdAt: '2026-05-18T09:15:00Z', fileName: 'chronic-summary-2026-05-18.csv' },
-  { id: '3', type: 'ffc-report', format: 'pdf', status: 'success', createdAt: '2026-05-17T14:00:00Z', fileName: 'ffc-report-2026-05-17.pdf' },
-  { id: '4', type: 'village-report', format: 'excel', status: 'failed', createdAt: '2026-05-17T11:20:00Z', fileName: 'village-report-2026-05-17.xlsx' },
-  { id: '5', type: 'patient-list', format: 'geojson', status: 'success', createdAt: '2026-05-16T16:45:00Z', fileName: 'patient-list-2026-05-16.geojson' },
-]
-
 async function downloadReport(type: string, format: string, filters: Record<string, unknown>) {
   const endpoint = format === 'pdf' ? '/api/v1/reports/pdf' : '/api/v1/reports/export'
   const body = { type, format, filters }
@@ -109,25 +113,68 @@ async function downloadReport(type: string, format: string, filters: Record<stri
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
+
+  return fileName
 }
 
 export default function ReportsPage() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
-  const [selectedVillage, setSelectedVillage] = useState('')
-  const [selectedDisease, setSelectedDisease] = useState('')
+  const [selectedVillage, setSelectedVillage] = useState('all')
+  const [selectedDisease, setSelectedDisease] = useState('all')
   const [dateRange, setDateRange] = useState('all')
+  const [villages, setVillages] = useState<VillageOption[]>([])
+  const [diseases, setDiseases] = useState<DiseaseOption[]>([])
+  const [exportHistory, setExportHistory] = useState<ExportHistory[]>([])
+
+  useEffect(() => {
+    fetch('/api/v1/villages')
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.success && Array.isArray(json.data)) setVillages(json.data)
+      })
+      .catch(console.error)
+
+    fetch('/api/v1/analytics/diseases')
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.success && Array.isArray(json.data)) setDiseases(json.data)
+      })
+      .catch(console.error)
+  }, [])
 
   const handleDownload = async (type: string, format: string) => {
     const downloadId = `${type}-${format}`
     setDownloadingId(downloadId)
     try {
-      await downloadReport(type, format, {
-        villageId: selectedVillage || undefined,
-        chronicCode: selectedDisease || undefined,
+      const fileName = await downloadReport(type, format, {
+        villageId: selectedVillage !== 'all' ? selectedVillage : undefined,
+        chronicCode: selectedDisease !== 'all' ? selectedDisease : undefined,
         dateRange: dateRange !== 'all' ? dateRange : undefined,
       })
+      setExportHistory((current) => [
+        {
+          id: `${Date.now()}`,
+          type,
+          format,
+          status: 'success' as const,
+          createdAt: new Date().toISOString(),
+          fileName,
+        },
+        ...current,
+      ].slice(0, 5))
       toast.success(`ดาวน์โหลด ${REPORT_TYPES.find((r) => r.id === type)?.title} (${FORMAT_LABELS[format] || format}) สำเร็จ`)
     } catch (error) {
+      setExportHistory((current) => [
+        {
+          id: `${Date.now()}`,
+          type,
+          format,
+          status: 'failed' as const,
+          createdAt: new Date().toISOString(),
+          fileName: `${type}-${new Date().toISOString().split('T')[0]}.${format}`,
+        },
+        ...current,
+      ].slice(0, 5))
       toast.error('ดาวน์โหลดไม่สำเร็จ', {
         description: error instanceof Error ? error.message : 'เกิดข้อผิดพลาด',
       })
@@ -167,10 +214,12 @@ export default function ReportsPage() {
                   <SelectValue placeholder="ทุกหมู่บ้าน" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">ทุกหมู่บ้าน</SelectItem>
-                  <SelectItem value="v1">หมู่ 1</SelectItem>
-                  <SelectItem value="v2">หมู่ 2</SelectItem>
-                  <SelectItem value="v3">หมู่ 3</SelectItem>
+                  <SelectItem value="all">ทุกหมู่บ้าน</SelectItem>
+                  {villages.map((village) => (
+                    <SelectItem key={village.id} value={village.id}>
+                      {village.moo ? `หมู่ ${village.moo} ` : ''}{village.name || village.id}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -181,10 +230,12 @@ export default function ReportsPage() {
                   <SelectValue placeholder="ทุกโรค" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">ทุกโรค</SelectItem>
-                  <SelectItem value="DM">DM — เบาหวาน</SelectItem>
-                  <SelectItem value="HT">HT — ความดันโลหิตสูง</SelectItem>
-                  <SelectItem value="TB">TB — วัณโรค</SelectItem>
+                  <SelectItem value="all">ทุกโรค</SelectItem>
+                  {diseases.map((disease) => (
+                    <SelectItem key={disease.name} value={disease.name}>
+                      {disease.name} — {disease.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -255,7 +306,7 @@ export default function ReportsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {MOCK_EXPORT_HISTORY.length === 0 ? (
+          {exportHistory.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">ไม่พบประวัติการส่งออก</p>
           ) : (
             <Table>
@@ -269,7 +320,7 @@ export default function ReportsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {MOCK_EXPORT_HISTORY.map((item) => {
+                {exportHistory.map((item) => {
                   const reportType = REPORT_TYPES.find((r) => r.id === item.type)
                   return (
                     <TableRow key={item.id}>
