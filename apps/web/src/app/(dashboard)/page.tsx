@@ -1,17 +1,22 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
-import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
-import StatsCards from '@/components/dashboard/StatsCards'
+import StatsCards, { type StatCardFilter } from '@/components/dashboard/StatsCards'
 import { useMapStore } from '@/stores/map.store'
 import type { MarkerData } from '@/types/api'
-import { Map, Search, Layers, Circle, Square } from 'lucide-react'
+import { Activity, Bed, Circle, HeartPulse, Home, Layers, Map, Search, Square, Users, X } from 'lucide-react'
 
 // Lazy load the map component since Leaflet is browser-only
 const MapView = dynamic(
@@ -34,13 +39,54 @@ const MapCluster = dynamic(
   { ssr: false }
 )
 
+const filterLabels: Record<StatCardFilter, string> = {
+  population: 'ประชากรทั้งหมด',
+  chronic: 'โรคเรื้อรัง',
+  bedridden: 'ติดเตียง',
+  risk: 'กลุ่มเสี่ยง',
+  ffcToday: 'FFC วันนี้',
+}
+
+function markerCount(value: unknown) {
+  const count = Number(value || 0)
+  return Number.isFinite(count) ? count.toLocaleString() : '0'
+}
+
+function markerText(value: unknown, fallback = '-') {
+  const text = String(value ?? '').trim()
+  return text || fallback
+}
+
+function markerResidents(value: unknown) {
+  if (!Array.isArray(value)) return []
+
+  return value.flatMap((resident) => {
+    if (!resident || typeof resident !== 'object') return []
+    const data = resident as Record<string, unknown>
+    return [{
+      name: markerText(data.name),
+      age: data.age === null || data.age === undefined ? null : Number(data.age),
+      chronicDisease: data.chronicDisease === true,
+      bedridden: data.bedridden === true,
+      gender: markerText(data.gender, 'ไม่ระบุ'),
+    }]
+  })
+}
+
+function riskBadgeVariant(riskLevel: string) {
+  return riskLevel === 'NORMAL' ? 'secondary' : 'destructive'
+}
+
 export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('')
+  const [activeFilter, setActiveFilter] = useState<StatCardFilter>('population')
+  const [selectedHouseMarker, setSelectedHouseMarker] = useState<MarkerData | null>(null)
   const [stats, setStats] = useState<{totalPopulation: number; totalChronic: number; totalBedridden: number; totalRisk: number; ffcToday: number} | undefined>(undefined)
   const [markers, setMarkers] = useState<MarkerData[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const activeLayers = useMapStore((s) => s.activeLayers)
   const toggleLayer = useMapStore((s) => s.toggleLayer)
+  const setLayerActive = useMapStore((s) => s.setLayerActive)
 
   useEffect(() => {
     fetch('/api/v1/analytics/dashboard')
@@ -61,12 +107,51 @@ export default function HomePage() {
       .catch(console.error)
   }, [])
 
+  const filteredMarkers = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase()
+
+    return markers.filter((marker) => {
+      const data = marker.popupData || {}
+      const matchesFilter =
+        activeFilter === 'population' ||
+        (activeFilter === 'chronic' && data.chronicDisease === true) ||
+        (activeFilter === 'bedridden' && data.bedridden === true) ||
+        (activeFilter === 'risk' && marker.riskLevel !== 'NORMAL') ||
+        (activeFilter === 'ffcToday' && data.ffcToday === true)
+
+      if (!matchesFilter) return false
+      if (!normalizedQuery) return true
+
+      return [
+        marker.label,
+        data.houseNo,
+        data.villageName,
+        data.residentNames,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedQuery))
+    })
+  }, [activeFilter, markers, searchQuery])
+
+  const selectStatsFilter = (filter: StatCardFilter) => {
+    setActiveFilter((current) => (current === filter ? 'population' : filter))
+    setLayerActive('markers', true)
+  }
+
+  const selectedHouseData = selectedHouseMarker?.popupData || {}
+  const selectedResidents = markerResidents(selectedHouseData.residents)
+
   return (
     <div className="relative flex h-full flex-col">
       {/* Stats bar - hidden on mobile */}
       <div className="hidden md:block">
         <div className="px-4 pt-4">
-          <StatsCards stats={stats} isLoading={isLoading} />
+          <StatsCards
+            stats={stats}
+            isLoading={isLoading}
+            activeFilter={activeFilter}
+            onFilterSelect={selectStatsFilter}
+          />
         </div>
       </div>
 
@@ -74,7 +159,12 @@ export default function HomePage() {
       <div className="relative flex-1">
         <MapView>
           {activeLayers.includes('markers') && (
-            <MapCluster markers={markers} fitBoundsOnLoad />
+            <MapCluster
+              markers={filteredMarkers}
+              fitBoundsOnLoad
+              fitBoundsKey={`${activeFilter}:${searchQuery}:${filteredMarkers.length}`}
+              onMarkerClick={setSelectedHouseMarker}
+            />
           )}
         </MapView>
 
@@ -90,6 +180,34 @@ export default function HomePage() {
             />
           </div>
         </div>
+
+        <Card className="absolute right-4 top-20 z-[1000] md:right-6 md:top-4">
+          <CardContent className="flex items-center gap-2 p-2 pl-3">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium">
+                {filterLabels[activeFilter]}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                {filteredMarkers.length.toLocaleString()} จุดบนแผนที่
+              </p>
+            </div>
+            {activeFilter !== 'population' || searchQuery ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => {
+                  setActiveFilter('population')
+                  setSearchQuery('')
+                }}
+                aria-label="ล้างตัวกรอง"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            ) : null}
+          </CardContent>
+        </Card>
 
         {/* Layer control */}
         <Card className="absolute bottom-4 right-4 z-[1000] hidden w-48 md:block">
@@ -151,6 +269,136 @@ export default function HomePage() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={selectedHouseMarker !== null}
+        onOpenChange={(open: boolean) => {
+          if (!open) setSelectedHouseMarker(null)
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+          <DialogHeader>
+            <div className="flex items-start gap-3 pr-8">
+              <div className="rounded-md bg-primary/10 p-2 text-primary">
+                <Home className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <DialogTitle className="truncate">
+                  {selectedHouseMarker?.label || 'ข้อมูลหลังคาเรือน'}
+                </DialogTitle>
+                <DialogDescription>
+                  {markerText(selectedHouseData.villageName)}
+                </DialogDescription>
+              </div>
+              {selectedHouseMarker ? (
+                <Badge variant={riskBadgeVariant(selectedHouseMarker.riskLevel)}>
+                  {selectedHouseMarker.riskLevel}
+                </Badge>
+              ) : null}
+            </div>
+          </DialogHeader>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Card>
+              <CardContent className="flex items-center gap-3 p-4">
+                <Users className="h-5 w-5 text-blue-600" />
+                <div>
+                  <p className="text-xs text-muted-foreground">จำนวนคนในบ้าน</p>
+                  <p className="text-xl font-bold">
+                    {markerCount(selectedHouseData.peopleCount)} คน
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center gap-3 p-4">
+                <HeartPulse className="h-5 w-5 text-red-600" />
+                <div>
+                  <p className="text-xs text-muted-foreground">โรคเรื้อรัง</p>
+                  <p className="text-xl font-bold">
+                    {markerCount(selectedHouseData.chronicCount)} คน
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center gap-3 p-4">
+                <Bed className="h-5 w-5 text-purple-600" />
+                <div>
+                  <p className="text-xs text-muted-foreground">ติดเตียง</p>
+                  <p className="text-xl font-bold">
+                    {markerCount(selectedHouseData.bedriddenCount)} คน
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center gap-3 p-4">
+                <Activity className="h-5 w-5 text-green-600" />
+                <div>
+                  <p className="text-xs text-muted-foreground">FFC วันนี้</p>
+                  <p className="text-xl font-bold">
+                    {markerCount(selectedHouseData.ffcTodayCount)} ครั้ง
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="rounded-md border p-4">
+            <div className="grid gap-2 text-sm sm:grid-cols-[120px_1fr]">
+              <span className="text-muted-foreground">รหัสหลังคาเรือน</span>
+              <span className="font-medium">{markerText(selectedHouseData.houseId)}</span>
+              <span className="text-muted-foreground">บ้านเลขที่</span>
+              <span className="font-medium">{markerText(selectedHouseData.houseNo)}</span>
+              <span className="text-muted-foreground">พิกัด</span>
+              <span className="font-medium">
+                {selectedHouseMarker
+                  ? `${selectedHouseMarker.lat.toFixed(6)}, ${selectedHouseMarker.lng.toFixed(6)}`
+                  : '-'}
+              </span>
+            </div>
+          </div>
+
+          {selectedResidents.length > 0 ? (
+            <div className="rounded-md border p-4">
+              <p className="mb-2 text-sm font-medium">สมาชิกในบ้าน</p>
+              <div className="divide-y">
+                {selectedResidents.map((resident, index) => (
+                  <div
+                    key={`${resident.name}-${index}`}
+                    className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-2 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-medium">{resident.name}</p>
+                      {resident.chronicDisease || resident.bedridden ? (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {resident.chronicDisease ? (
+                            <Badge variant="destructive" className="px-2 py-0 text-[10px]">
+                              โรคเรื้อรัง
+                            </Badge>
+                          ) : null}
+                          {resident.bedridden ? (
+                            <Badge variant="secondary" className="px-2 py-0 text-[10px]">
+                              ติดเตียง
+                            </Badge>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    <span className="text-muted-foreground">
+                      {resident.age === null || Number.isNaN(resident.age)
+                        ? 'ไม่ระบุอายุ'
+                        : `${resident.age.toLocaleString()} ปี`}
+                    </span>
+                    <Badge variant="outline">{resident.gender}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

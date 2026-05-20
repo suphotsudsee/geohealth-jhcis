@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet.markercluster'
@@ -12,7 +12,6 @@ import type { MarkerData } from '@/types/api'
 import { useMapStore } from '@/stores/map.store'
 import { getRiskColor } from '@/lib/utils'
 
-// ── Custom cluster icon ──
 function createClusterIcon(count: number): L.DivIcon {
   const size = Math.min(36 + count * 2, 56)
   return L.divIcon({
@@ -37,10 +36,9 @@ function createClusterIcon(count: number): L.DivIcon {
   })
 }
 
-// ── Helper: create a single marker ──
 function createMarker(
   marker: MarkerData,
-  onClick: (id: string) => void,
+  onClick: (marker: MarkerData) => void,
   selected: boolean,
 ): L.Marker {
   const color = getRiskColor(marker.riskLevel)
@@ -63,54 +61,42 @@ function createMarker(
     iconAnchor: [(size + borderW * 2) / 2, (size + borderW * 2) / 2],
   })
 
-  const popupHtml = `
-    <div style="min-width:140px;">
-      ${marker.label ? `<p style="margin:0 0 4px;font-weight:600;font-size:13px;">${marker.label}</p>` : ''}
-      <p style="margin:0 0 2px;font-size:11px;color:#64748b;">
-        ความเสี่ยง: <span style="color:${color};font-weight:600;">${marker.riskLevel}</span>
-      </p>
-      ${marker.popupData ? `<p style="margin:0;font-size:10px;color:#94a3b8;">${JSON.stringify(marker.popupData).replace(/["{}]/g, '')}</p>` : ''}
-    </div>
-  `
-
-  const m = L.marker([marker.lat, marker.lng], { icon })
-  m.bindPopup(popupHtml, { maxWidth: 300, className: '' })
-  m.on('click', () => onClick(marker.id))
-  return m
+  const leafletMarker = L.marker([marker.lat, marker.lng], { icon })
+  leafletMarker.on('click', () => onClick(marker))
+  return leafletMarker
 }
 
-// ── Props ──
 export interface MapClusterProps {
   markers: MarkerData[]
   maxClusterRadius?: number
   disableClusteringAtZoom?: number
   fitBoundsOnLoad?: boolean
+  fitBoundsKey?: string
+  onMarkerClick?: (marker: MarkerData) => void
 }
 
-/**
- * MapCluster — renders a MarkerClusterGroup with colored circle markers.
- * Uses plain Leaflet + MarkerClusterGroup directly on the map instance.
- */
 export default function MapCluster({
   markers,
   maxClusterRadius = 50,
   disableClusteringAtZoom = 16,
   fitBoundsOnLoad = false,
+  fitBoundsKey = 'initial',
+  onMarkerClick,
 }: MapClusterProps) {
   const map = useMap()
   const clusterGroupRef = useRef<L.MarkerClusterGroup | null>(null)
-  const hasFitBoundsRef = useRef(false)
+  const lastFitBoundsKeyRef = useRef<string | null>(null)
   const selectMarker = useMapStore((s) => s.selectMarker)
   const selectedMarkerId = useMapStore((s) => s.selectedMarkerId)
 
   const handleClick = useCallback(
-    (id: string) => {
-      selectMarker(id)
+    (marker: MarkerData) => {
+      selectMarker(marker.id)
+      onMarkerClick?.(marker)
     },
-    [selectMarker],
+    [onMarkerClick, selectMarker],
   )
 
-  // Create and add the cluster group once
   useEffect(() => {
     if (clusterGroupRef.current) return
 
@@ -128,7 +114,6 @@ export default function MapCluster({
       },
     })
 
-    // Set custom icon function after creation
     ;(group as any).options.iconCreateFunction = (cluster: L.MarkerCluster) => {
       return createClusterIcon(cluster.getChildCount())
     }
@@ -142,7 +127,6 @@ export default function MapCluster({
     }
   }, [map, maxClusterRadius, disableClusteringAtZoom])
 
-  // Update markers when data changes
   useEffect(() => {
     const group = clusterGroupRef.current
     if (!group) return
@@ -150,19 +134,27 @@ export default function MapCluster({
     group.clearLayers()
 
     markers.forEach((marker) => {
-      const m = createMarker(marker, handleClick, selectedMarkerId === marker.id)
-      group.addLayer(m)
+      const leafletMarker = createMarker(
+        marker,
+        handleClick,
+        selectedMarkerId === marker.id,
+      )
+      group.addLayer(leafletMarker)
     })
 
-    if (fitBoundsOnLoad && markers.length > 0 && !hasFitBoundsRef.current) {
+    if (
+      fitBoundsOnLoad &&
+      markers.length > 0 &&
+      lastFitBoundsKeyRef.current !== fitBoundsKey
+    ) {
       map.fitBounds(group.getBounds(), { padding: [32, 32], maxZoom: 15 })
-      hasFitBoundsRef.current = true
+      lastFitBoundsKeyRef.current = fitBoundsKey
     }
 
     return () => {
       group.clearLayers()
     }
-  }, [markers, handleClick, selectedMarkerId, fitBoundsOnLoad, map])
+  }, [markers, handleClick, selectedMarkerId, fitBoundsOnLoad, fitBoundsKey, map])
 
   return null
 }

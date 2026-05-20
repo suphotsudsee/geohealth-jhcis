@@ -8,6 +8,7 @@ interface MapState {
   setCenter: (center: [number, number]) => void
   setZoom: (zoom: number) => void
   toggleLayer: (layer: string) => void
+  setLayerActive: (layer: string, active: boolean) => void
   selectMarker: (id: string | null) => void
 }
 
@@ -23,6 +24,14 @@ export const useMapStore = create<MapState>((set) => ({
       activeLayers: state.activeLayers.includes(layer)
         ? state.activeLayers.filter((l) => l !== layer)
         : [...state.activeLayers, layer],
+    })),
+  setLayerActive: (layer, active) =>
+    set((state) => ({
+      activeLayers: active
+        ? state.activeLayers.includes(layer)
+          ? state.activeLayers
+          : [...state.activeLayers, layer]
+        : state.activeLayers.filter((l) => l !== layer),
     })),
   selectMarker: (id) => set({ selectedMarkerId: id }),
 }))

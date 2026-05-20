@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { RowDataPacket } from 'mysql2/promise'
-import { genderFromJhcis, jhcisHouseId, jhcisPersonId, jhcisQuery, normalizeJhcisCoordinate, riskFromChronic } from '@/lib/jhcis'
+import { jhcisHouseId, jhcisQuery, normalizeJhcisCoordinate, riskFromChronic } from '@/lib/jhcis'
 import type { MarkerData } from '@/types/api'
 
 export const runtime = 'nodejs'
@@ -12,14 +12,36 @@ type MarkerRow = RowDataPacket & {
   xgis: string | null
   ygis: string | null
   villageName: string | null
-  personPcucode: string | null
-  pid: number | null
-  cid: string | null
-  firstName: string | null
-  lastName: string | null
-  age: number | null
-  genderCode: string | null
+  peopleCount: number
   chronicCount: number
+  bedriddenCount: number
+  ffcTodayCount: number
+  residentNames: string | null
+  residentDetails: string | null
+}
+
+function genderLabelFromJhcis(sex: unknown) {
+  if (String(sex) === '1') return 'ชาย'
+  if (String(sex) === '2') return 'หญิง'
+  return 'ไม่ระบุ'
+}
+
+function parseResidentDetails(details: string | null) {
+  if (!details) return []
+
+  return details
+    .split('\n')
+    .map((item) => {
+      const [name, age, genderCode] = item.split('\t')
+      return {
+        name: name || '-',
+        age: age ? Number(age) : null,
+        gender: genderLabelFromJhcis(genderCode),
+        chronicDisease: item.split('\t')[3] === '1',
+        bedridden: item.split('\t')[4] === '1',
+      }
+    })
+    .filter((resident) => resident.name !== '-')
 }
 
 export async function GET(request: NextRequest) {
@@ -42,20 +64,35 @@ export async function GET(request: NextRequest) {
         h.xgis,
         h.ygis,
         v.villname AS villageName,
-        p.pcucodeperson AS personPcucode,
-        p.pid,
-        p.idcard AS cid,
-        p.fname AS firstName,
-        p.lname AS lastName,
-        TIMESTAMPDIFF(YEAR, p.birth, CURDATE()) AS age,
-        p.sex AS genderCode,
-        COUNT(pc.chroniccode) AS chronicCount
+        COUNT(DISTINCT p.pid) AS peopleCount,
+        COUNT(DISTINCT pc.pid) AS chronicCount,
+        COUNT(DISTINCT pu.pid) AS bedriddenCount,
+        COUNT(DISTINCT CONCAT(vt.pcucode, ':', vt.visitno)) AS ffcTodayCount,
+        GROUP_CONCAT(
+          DISTINCT NULLIF(TRIM(CONCAT(COALESCE(p.fname, ''), ' ', COALESCE(p.lname, ''))), '')
+          ORDER BY p.fname, p.lname
+          SEPARATOR ', '
+        ) AS residentNames,
+        GROUP_CONCAT(
+          DISTINCT CONCAT_WS(
+            '\t',
+            NULLIF(TRIM(CONCAT(COALESCE(p.fname, ''), ' ', COALESCE(p.lname, ''))), ''),
+            COALESCE(TIMESTAMPDIFF(YEAR, p.birth, CURDATE()), ''),
+            COALESCE(p.sex, ''),
+            IF(pc.pid IS NULL, '0', '1'),
+            IF(pu.pid IS NULL, '0', '1')
+          )
+          ORDER BY p.fname, p.lname
+          SEPARATOR '\n'
+        ) AS residentDetails
       FROM house h
       LEFT JOIN village v ON v.pcucode = h.pcucode AND v.villcode = h.villcode
       LEFT JOIN person p ON p.pcucodeperson = h.pcucode AND p.hcode = h.hcode
       LEFT JOIN personchronic pc ON pc.pcucodeperson = p.pcucodeperson AND pc.pid = p.pid
+      LEFT JOIN personunable pu ON pu.pcucodeperson = p.pcucodeperson AND pu.pid = p.pid
+      LEFT JOIN visit vt ON vt.pcucodeperson = p.pcucodeperson AND vt.pid = p.pid AND vt.visitdate = CURDATE()
       WHERE ${where.join(' AND ')}
-      GROUP BY h.pcucode, h.hcode, h.hno, h.xgis, h.ygis, v.villname, p.pcucodeperson, p.pid, p.idcard, p.fname, p.lname, p.birth, p.sex
+      GROUP BY h.pcucode, h.hcode, h.hno, h.xgis, h.ygis, v.villname
       LIMIT 10000`,
       params
     )
@@ -64,22 +101,31 @@ export async function GET(request: NextRequest) {
       const coord = normalizeJhcisCoordinate(row.xgis, row.ygis)
       if (coord.lat === null || coord.lng === null) return []
 
-      const hasPatient = row.personPcucode && row.pid !== null
-      const fullName = [row.firstName, row.lastName].filter(Boolean).join(' ')
+      const houseId = jhcisHouseId(row.pcucode, row.hcode)
+      const chronicCount = Number(row.chronicCount || 0)
+      const bedriddenCount = Number(row.bedriddenCount || 0)
+      const ffcTodayCount = Number(row.ffcTodayCount || 0)
+
       return [{
-        id: hasPatient ? jhcisPersonId(row.personPcucode as string, row.pid as number) : jhcisHouseId(row.pcucode, row.hcode),
+        id: houseId,
         lat: coord.lat,
         lng: coord.lng,
-        type: hasPatient ? 'patient' as const : 'house' as const,
-        riskLevel: riskFromChronic(row.chronicCount) as MarkerData['riskLevel'],
-        label: hasPatient ? fullName : `บ้านเลขที่ ${row.houseNo || ''}`,
+        type: 'house' as const,
+        riskLevel: riskFromChronic(chronicCount) as MarkerData['riskLevel'],
+        label: `บ้านเลขที่ ${row.houseNo || '-'}`,
         popupData: {
-          cid: row.cid,
-          age: row.age,
-          gender: hasPatient ? genderFromJhcis(row.genderCode) : undefined,
-          chronicDisease: Number(row.chronicCount || 0) > 0,
+          houseId,
+          chronicDisease: chronicCount > 0,
+          bedridden: bedriddenCount > 0,
+          ffcToday: ffcTodayCount > 0,
           houseNo: row.houseNo,
           villageName: row.villageName,
+          peopleCount: Number(row.peopleCount || 0),
+          chronicCount,
+          bedriddenCount,
+          ffcTodayCount,
+          residentNames: row.residentNames,
+          residents: parseResidentDetails(row.residentDetails),
         },
       }]
     })
