@@ -22,6 +22,7 @@ COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 
 COPY apps/web apps/web
 COPY services/prisma services/prisma
+COPY scripts scripts
 RUN mkdir -p apps/web/public
 
 # Generate Prisma client (absolute path from root /app)
@@ -54,6 +55,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next ./apps/web/.next
 COPY --from=builder /app/node_modules ./node_modules
 # Copy workspace-specific node_modules (plugins, configs)
 COPY --from=builder /app/apps/web/node_modules ./apps/web/node_modules
+COPY --from=builder /app/apps/web/node_modules/bcryptjs ./node_modules/bcryptjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 
 # Copy Prisma schema for db push
 COPY --from=builder /app/services/prisma ./prisma
