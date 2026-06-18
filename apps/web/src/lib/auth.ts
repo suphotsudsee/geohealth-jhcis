@@ -23,7 +23,7 @@ export function generateTokens(user: { id: string; role: string; villageCode?: s
   )
 
   const refreshToken = jwt.sign(
-    { userId: user.id, type: 'refresh' },
+    { userId: user.id, type: 'refresh', jti: crypto.randomUUID() },
     JWT_SECRET,
     { expiresIn: REFRESH_TOKEN_TTL }
   )
